@@ -255,6 +255,26 @@ struct GamesClientTests {
         #expect(game.supportedFeatures == [.rtx])
         #expect(game.isInLibrary)
         #expect(game.variants.map(\.id) == ["one-variant"])
+        #expect(game.supportedControls == ["KEYBOARD"])
+        #expect(game.variants.first?.supportedControls == ["DUALSHOCK4_GAMEPAD"])
+    }
+
+    @Test("Game caches preserve controller support and accept older entries without it")
+    func cachedSupportedControls() throws {
+        let legacy = Data(#"{"id":"game","title":"Game","isInLibrary":false,"variants":[{"id":"variant","appStore":"STEAM"}]}"#.utf8)
+        var game = try JSONDecoder().decode(GameInfo.self, from: legacy)
+
+        #expect(game.supportedControls == nil)
+        #expect(game.variants.first?.supportedControls == nil)
+        game.supportedControls = ["KEYBOARD"]
+        game.variants[0].supportedControls = ["DUALSHOCK4_GAMEPAD"]
+
+        let restored = try JSONDecoder().decode(
+            GameInfo.self,
+            from: JSONEncoder().encode(game)
+        )
+
+        #expect(restored == game)
     }
 
     @Test("A Library request uses one locale for browse, metadata, and cache scope")
@@ -574,6 +594,7 @@ private nonisolated func libraryBrowsePage(ids: [String]) -> String {
               "id": "\(id)",
               "title": "Browse \(id)",
               "genres": ["ACTION"],
+              "supportedControls": ["KEYBOARD"],
               "images": {
                 "GAME_BOX_ART": "https://images.invalid/browse-\(id).jpg"
               },
@@ -581,6 +602,7 @@ private nonisolated func libraryBrowsePage(ids: [String]) -> String {
                 {
                   "id": "\(id)-variant",
                   "appStore": "STEAM",
+                  "supportedControls": ["DUALSHOCK4_GAMEPAD"],
                   "gfn": {
                     "status": "AVAILABLE",
                     "library": {

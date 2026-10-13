@@ -44,6 +44,28 @@ struct StreamView: View {
 
     private let cloudMatchClient: CloudMatchClient
 
+    private var streamSupportedControls: [String]? {
+        if let appId = existingSession?.appId {
+            return supportedControls(for: appId)
+        }
+        if let directSession,
+           let lastSession = viewModel.lastSession,
+           directSession.sessionId == lastSession.sessionId
+        {
+            return supportedControls(for: lastSession.appId)
+        }
+        return supportedControls(for: nil)
+    }
+
+    private func supportedControls(for appId: String?) -> [String]? {
+        let variant: GameVariant? = if let appId {
+            game.variants.first { $0.appId == appId || $0.id == appId }
+        } else {
+            game.variants.first
+        }
+        return variant?.supportedControls ?? game.supportedControls
+    }
+
     init(
         game: GameInfo,
         settings: StreamSettings = .init(),
@@ -711,7 +733,12 @@ struct StreamView: View {
                     _ = await stopOwnedSessionAndReleaseLease()
                     return
                 }
-                await streamController.connect(session: sessionInfo, settings: settings, accountAllowsHDR: viewModel.subscription?.allowsHDR)
+                await streamController.connect(
+                    session: sessionInfo,
+                    settings: settings,
+                    accountAllowsHDR: viewModel.subscription?.allowsHDR,
+                    supportedControls: streamSupportedControls
+                )
                 return
             } catch is CancellationError {
                 return
@@ -760,8 +787,10 @@ struct StreamView: View {
 
             var sessionInfo: SessionInfo
             var isContinuingExistingSession = false
+            var connectedAppId = game.variants.first?.appId ?? game.variants.first?.id
 
             if let existing = existingSession, let serverIp = existing.serverIp {
+                connectedAppId = existing.appId
                 streamLog.info("startSession: resume path, sessionId=\(existing.sessionId)")
                 // Resume path: attach to the existing session without creating a new one
                 sessionInfo = try await cloudMatchClient.claimSession(
@@ -896,7 +925,12 @@ struct StreamView: View {
                 _ = await stopOwnedSessionAndReleaseLease()
                 return
             }
-            await streamController.connect(session: sessionInfo, settings: settings, accountAllowsHDR: viewModel.subscription?.allowsHDR)
+            await streamController.connect(
+                session: sessionInfo,
+                settings: settings,
+                accountAllowsHDR: viewModel.subscription?.allowsHDR,
+                supportedControls: supportedControls(for: connectedAppId)
+            )
         } catch is CancellationError {
             return
         } catch SessionOrchestrationError.setupTimedOut {

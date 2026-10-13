@@ -230,6 +230,7 @@ nonisolated enum CloudKeyboardHIDMapper {
 nonisolated enum InputPacketCategory: String, Sendable {
     case heartbeat
     case gamepadSnapshot
+    case gamepadConnection
     case keyboard
     case mouseButton
     case mouseMove
@@ -260,7 +261,7 @@ nonisolated enum KeyboardReplayCompletionResult: Equatable, Sendable {
 /// Reusable fixed-capacity storage handed exclusively from InputSender to the WebRTC send queue.
 /// The sender does not mutate a packet again until the completion returns it to the pool.
 final nonisolated class EncodedInputPacket: @unchecked Sendable {
-    static let capacity = 64
+    static let capacity = 96
 
     let storage = NSMutableData(length: capacity)!
     private(set) var count = 0
@@ -367,6 +368,51 @@ final nonisolated class InputEncoder {
         writeInt16LE(buf, offset: payloadOffset + 22, value: rightStickY)
         buf[payloadOffset + 26] = 0x55
         writeTimestampLE(buf, offset: payloadOffset + 30, value: timestamp)
+    }
+
+    // MARK: Sony Gamepad
+
+    func encodeSonyDeviceChange(controllerId: Int, connected: Bool, into packet: EncodedInputPacket) {
+        let offset = protocolVersion >= 3 ? 10 : 0
+        let bytes = packet.prepare(length: offset + GFNSonyGamepad.deviceChangeSize)
+        writeSingleEventHeader(bytes, timestamp: currentTimestamp())
+        GFNSonyGamepad.writeDeviceChange(
+            slot: controllerId,
+            connected: connected,
+            into: UnsafeMutableRawBufferPointer(rebasing: bytes[offset...])
+        )
+    }
+
+    func encodeSonyGamepad(
+        controllerId: Int,
+        buttons: UInt16,
+        leftTrigger: UInt8,
+        rightTrigger: UInt8,
+        leftStickX: Int16,
+        leftStickY: Int16,
+        rightStickX: Int16,
+        rightStickY: Int16,
+        into packet: EncodedInputPacket
+    ) {
+        let offset = protocolVersion >= 3 ? 12 : 0
+        let bytes = packet.prepare(length: offset + GFNSonyGamepad.reportSize)
+        if protocolVersion >= 3 {
+            bytes[0] = 0x23
+            writeTimestampBE(bytes, offset: 1, value: currentTimestamp())
+            bytes[9] = 0x21
+            writeUInt16BE(bytes, offset: 10, value: UInt16(GFNSonyGamepad.reportSize))
+        }
+        GFNSonyGamepad.writeReport(
+            slot: controllerId,
+            buttons: buttons,
+            leftTrigger: leftTrigger,
+            rightTrigger: rightTrigger,
+            leftStickX: leftStickX,
+            leftStickY: leftStickY,
+            rightStickX: rightStickX,
+            rightStickY: rightStickY,
+            into: UnsafeMutableRawBufferPointer(rebasing: bytes[offset...])
+        )
     }
 
     // MARK: Keyboard
@@ -670,6 +716,10 @@ final nonisolated class InputSender: @unchecked Sendable {
     private var keyboardLayout = StreamSettings.defaultKeyboardLayout
     private var steamOverlayGestureEnabled = true
     private var isPaused = false
+    private var isRunning = false
+    private var sonyGamepadEnabled = false
+    private var sonySlots = Set<Int>()
+    private var sonyAttachTokens: [Int: UUID] = [:]
 
     private var extendedControllers: [GCController] = []
     private var microControllers: [GCController] = []
@@ -721,6 +771,7 @@ final nonisolated class InputSender: @unchecked Sendable {
     func start() {
         inputQueue.sync {
             guard sampler == nil else { return }
+            isRunning = true
             registerControllerNotifications()
             GCController.controllers().forEach(attachController)
             GCMouse.mice().forEach(setupMouseHandlers)
@@ -742,12 +793,17 @@ final nonisolated class InputSender: @unchecked Sendable {
 
     func stop() {
         inputQueue.sync {
+            isRunning = false
             cancelKeyboardReplay()
             sampler?.setEventHandler {}
             sampler?.cancel()
             sampler = nil
             observations.forEach { NotificationCenter.default.removeObserver($0) }
             observations.removeAll()
+            for slot in sonySlots.sorted() {
+                sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap), slot: slot, force: true)
+                sendSonyDeviceChange(slot: slot, connected: false)
+            }
             for extendedController in extendedControllers {
                 clearControllerHandlers(extendedController)
                 releaseControllerInput(extendedController)
@@ -759,6 +815,12 @@ final nonisolated class InputSender: @unchecked Sendable {
             GCMouse.mice().forEach(clearMouseHandlers)
             extendedControllers.removeAll()
             microControllers.removeAll()
+            controllerSlots.removeAll()
+            sonySlots.removeAll()
+            sonyAttachTokens.removeAll()
+            gamepadBitmap = 0
+            lastSnapshots.removeAll()
+            lastSnapshotSend.removeAll()
         }
     }
 
@@ -772,7 +834,8 @@ final nonisolated class InputSender: @unchecked Sendable {
         steamOverlayGestureEnabled: Bool,
         remoteMode: RemoteInputMode,
         rumbleEnabled: Bool = true,
-        rumbleIntensity: Float = 1.0
+        rumbleIntensity: Float = 1.0,
+        sonyGamepadEnabled: Bool = false
     ) {
         inputQueue.sync {
             encoder.setProtocolVersion(protocolVersion)
@@ -790,6 +853,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             self.remoteMode = remoteMode
             self.rumbleEnabled = rumbleEnabled
             self.rumbleIntensity = rumbleIntensity
+            self.sonyGamepadEnabled = sonyGamepadEnabled && protocolVersion >= 3
             keyboardShortcutResolvers.removeAll()
             haptics.values.forEach { $0.setIntensityScale(rumbleIntensity) }
         }
@@ -1178,18 +1242,32 @@ final nonisolated class InputSender: @unchecked Sendable {
             gamepadSlot: slot,
             replaceableGamepadSnapshot: isReplaceable
         ) {
-            encoder.encodeGamepad(
-                controllerId: slot,
-                buttons: snapshot.buttons,
-                leftTrigger: snapshot.leftTrigger,
-                rightTrigger: snapshot.rightTrigger,
-                leftStickX: snapshot.leftStickX,
-                leftStickY: snapshot.leftStickY,
-                rightStickX: snapshot.rightStickX,
-                rightStickY: snapshot.rightStickY,
-                gamepadBitmap: snapshot.bitmap,
-                into: $0
-            )
+            if sonySlots.contains(slot) {
+                encoder.encodeSonyGamepad(
+                    controllerId: slot,
+                    buttons: snapshot.buttons,
+                    leftTrigger: snapshot.leftTrigger,
+                    rightTrigger: snapshot.rightTrigger,
+                    leftStickX: snapshot.leftStickX,
+                    leftStickY: snapshot.leftStickY,
+                    rightStickX: snapshot.rightStickX,
+                    rightStickY: snapshot.rightStickY,
+                    into: $0
+                )
+            } else {
+                encoder.encodeGamepad(
+                    controllerId: slot,
+                    buttons: snapshot.buttons,
+                    leftTrigger: snapshot.leftTrigger,
+                    rightTrigger: snapshot.rightTrigger,
+                    leftStickX: snapshot.leftStickX,
+                    leftStickY: snapshot.leftStickY,
+                    rightStickX: snapshot.rightStickX,
+                    rightStickY: snapshot.rightStickY,
+                    gamepadBitmap: snapshot.bitmap,
+                    into: $0
+                )
+            }
         }
     }
 
@@ -1880,6 +1958,7 @@ final nonisolated class InputSender: @unchecked Sendable {
     }
 
     private func attachController(_ controller: GCController) {
+        guard isRunning else { return }
         controller.handlerQueue = inputQueue
         if let pad = controller.extendedGamepad {
             guard !extendedControllers.contains(where: { $0 === controller }),
@@ -1892,7 +1971,24 @@ final nonisolated class InputSender: @unchecked Sendable {
                 haptics[slot] = haptic
                 advertiseHaptics(true)
             }
-            gamepadBitmap |= Self.extendedGamepadBitmapMask(for: slot)
+            if sonyGamepadEnabled, pad is GCDualSenseGamepad || pad is GCDualShockGamepad {
+                let attachToken = UUID()
+                sonyAttachTokens[slot] = attachToken
+                sonySlots.insert(slot)
+                sendSonyDeviceChange(slot: slot, connected: true) { [weak self, weak controller] disposition in
+                    guard let self, let controller, isRunning,
+                          controllerSlots[ObjectIdentifier(controller)] == slot,
+                          sonyAttachTokens[slot] == attachToken
+                    else { return }
+                    sonyAttachTokens[slot] = nil
+                    guard disposition != .accepted else { return }
+                    sonySlots.remove(slot)
+                    gamepadBitmap |= Self.extendedGamepadBitmapMask(for: slot)
+                    sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap), slot: slot, force: true)
+                }
+            } else {
+                gamepadBitmap |= Self.extendedGamepadBitmapMask(for: slot)
+            }
             lastButtons[slot] = mapGCControllerToXInput(controller, deadzone: deadzone).buttons
             pad.valueChangedHandler = { [weak self, weak controller] _, _ in
                 guard let controller else { return }
@@ -1923,6 +2019,13 @@ final nonisolated class InputSender: @unchecked Sendable {
         controller.playerIndex = .indexUnset
         let id = ObjectIdentifier(controller)
         if let slot = controllerSlots.removeValue(forKey: id) {
+            let wasSony = sonySlots.contains(slot)
+            sonyAttachTokens[slot] = nil
+            if wasSony {
+                sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap), slot: slot, force: true)
+                sendSonyDeviceChange(slot: slot, connected: false)
+                sonySlots.remove(slot)
+            }
             haptics[slot]?.cleanup()
             haptics[slot] = nil
             if haptics.isEmpty {
@@ -1938,7 +2041,9 @@ final nonisolated class InputSender: @unchecked Sendable {
             keyboardShortcutResolvers[slot] = nil
             steamHoldTicks[slot] = nil
             steamTriggeredSlots.remove(slot)
-            sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap), slot: slot, force: true)
+            if !wasSony {
+                sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap), slot: slot, force: true)
+            }
         } else {
             microControllers.removeAll { $0 === controller }
         }
@@ -1947,6 +2052,16 @@ final nonisolated class InputSender: @unchecked Sendable {
     private var firstFreeSlot: Int? {
         let used = Set(controllerSlots.values)
         return (0 ..< 4).first { !used.contains($0) }
+    }
+
+    private func sendSonyDeviceChange(
+        slot: Int,
+        connected: Bool,
+        completion: (@Sendable (InputSendDisposition) -> Void)? = nil
+    ) {
+        sendEncoded(category: .gamepadConnection, completion: completion) {
+            encoder.encodeSonyDeviceChange(controllerId: slot, connected: connected, into: $0)
+        }
     }
 
     private static func connectedGamepadBit(for slot: Int) -> UInt16 {

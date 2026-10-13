@@ -6,7 +6,7 @@ nonisolated struct SignalingPeerInfo: Equatable, Sendable {
 }
 
 nonisolated enum SignalingPeerPayload: Equatable, Sendable {
-    case offer(sdp: String)
+    case offer(sdp: String, nvstSdp: String? = nil)
     case ice(candidate: String, sdpMid: String?, sdpMLineIndex: Int?)
     case unknown(type: String?, keys: [String])
 }
@@ -75,7 +75,7 @@ nonisolated enum SignalingMessageCodec {
                 guard let sdp = payloadObject["sdp"] as? String else {
                     throw SignalingMessageCodecError.missingField("peer_msg.msg.sdp")
                 }
-                payload = .offer(sdp: sdp)
+                payload = .offer(sdp: sdp, nvstSdp: payloadObject["nvstSdp"] as? String)
             } else if let candidate = payloadObject["candidate"] as? String {
                 payload = .ice(
                     candidate: candidate,

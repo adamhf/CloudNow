@@ -18,7 +18,7 @@ private nonisolated enum SignalingRacePolicy {
 nonisolated enum SignalingEvent {
     case connected
     case disconnected(reason: String)
-    case offer(sdp: String)
+    case offer(sdp: String, nvstSdp: String? = nil)
     case remoteICE(candidate: String, sdpMid: String?, sdpMLineIndex: Int?)
     case log(String)
     case error(String)
@@ -356,8 +356,8 @@ final class GFNSignalingClient {
         }
 
         switch message.payload {
-        case let .offer(sdp):
-            onEvent?(.offer(sdp: sdp))
+        case let .offer(sdp, nvstSdp):
+            onEvent?(.offer(sdp: sdp, nvstSdp: nvstSdp))
         case let .ice(candidate, sdpMid, sdpMLineIndex):
             onEvent?(.remoteICE(
                 candidate: candidate,

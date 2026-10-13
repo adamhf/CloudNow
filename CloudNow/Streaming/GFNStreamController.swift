@@ -363,6 +363,8 @@ final class GFNStreamController: NSObject {
     private var videoReceiver: LKRTCRtpReceiver?
     private var protocolVersion = 2
     private var partialReliableThresholdMs = 300
+    private var gameSupportsDualShock = false
+    private var serverHidMask: UInt32 = 0
     private var sessionInfo: SessionInfo?
     private var membershipTier: String?
     private var settings = StreamSettings()
@@ -406,7 +408,8 @@ final class GFNStreamController: NSObject {
         settings: StreamSettings,
         accountAllowsHDR: Bool? = nil,
         membershipTier: String? = nil,
-        sessionStartedAt: Date? = nil
+        sessionStartedAt: Date? = nil,
+        supportedControls: [String]? = nil
     ) async {
         // Block if already active; allow from idle, disconnected, or failed (retry case)
         let currentState = state
@@ -430,6 +433,7 @@ final class GFNStreamController: NSObject {
         sessionInfo = session
         self.membershipTier = membershipTier
         self.sessionStartedAt = sessionStartedAt
+        gameSupportsDualShock = supportedControls?.contains("DUALSHOCK4_GAMEPAD") == true
         self.settings = settings
         self.accountAllowsHDR = accountAllowsHDR
         colorState = StreamColorState(
@@ -714,6 +718,7 @@ final class GFNStreamController: NSObject {
         }
         peerConnection = newPeerConnection
         controlChannel = nil
+        serverHidMask = 0
     }
 
     private nonisolated func registerControlChannel(
@@ -749,6 +754,7 @@ final class GFNStreamController: NSObject {
         serverStopped = false
         invalidateControllerTextEntryReplay()
         inputSender?.stop()
+        inputSendQueue.sync {}
         signaling?.disconnect()
         signaling = nil
         videoView?.videoTrack = nil
@@ -778,6 +784,7 @@ final class GFNStreamController: NSObject {
         membershipTier = nil
         signalingComplete = false
         inputReady = false
+        gameSupportsDualShock = false
         previousVideoStats = nil
         statsTick = 0
         previousSelectedCandidatePairId = ""
@@ -825,6 +832,7 @@ final class GFNStreamController: NSObject {
 
         // Tear down current peer connection before reconnecting
         inputSender?.stop()
+        inputSendQueue.sync {}
         videoView?.inputHandler = nil
         signaling?.disconnect()
         signaling = nil
@@ -925,8 +933,8 @@ final class GFNStreamController: NSObject {
         switch event {
         case .connected:
             break
-        case let .offer(sdp):
-            await handleOffer(sdp: sdp, signalingClient: sourceClient)
+        case let .offer(sdp, nvstSdp):
+            await handleOffer(sdp: sdp, nvstSdp: nvstSdp, signalingClient: sourceClient)
         case let .remoteICE(candidate, sdpMid, sdpMLineIndex):
             addRemoteICE(candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex)
         case let .disconnected(reason):
@@ -1033,6 +1041,7 @@ final class GFNStreamController: NSObject {
 
     private func handleOffer(
         sdp: String,
+        nvstSdp: String?,
         signalingClient: GFNSignalingClient
     ) async {
         guard signaling === signalingClient, let session = sessionInfo else { return }
@@ -1092,6 +1101,7 @@ final class GFNStreamController: NSObject {
             return
         }
         setActivePeerConnection(pc)
+        serverHidMask = GFNSonyGamepad.serverHidMask(in: nvstSdp)
         if settings.enableRtcEventLog {
             if let url = startRtcEventLog() {
                 gfnLog.debug("[Stats] RTC event log: \(url.path, privacy: .public)")
@@ -1404,7 +1414,7 @@ final class GFNStreamController: NSObject {
             "m=application 0 RTP/AVP",
             "a=msid:input_1",
             "a=ri.partialReliableThresholdMs:\(partialReliableThresholdMs)",
-            "a=ri.hidDeviceMask:0",
+            "a=ri.hidDeviceMask:\(gameSupportsDualShock ? serverHidMask & 4 : 0)",
             "a=ri.enablePartiallyReliableTransferGamepad:\(protocolVersion == 3 ? 65535 : 0)",
             "a=ri.enablePartiallyReliableTransferHid:0",
             "",
@@ -2377,7 +2387,12 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                 steamOverlayGestureEnabled: settings.enableSteamOverlayGesture,
                 remoteMode: settings.defaultRemoteInputMode,
                 rumbleEnabled: settings.rumbleEnabled,
-                rumbleIntensity: Float(settings.rumbleIntensity)
+                rumbleIntensity: Float(settings.rumbleIntensity),
+                sonyGamepadEnabled: GFNSonyGamepad.isSupported(
+                    protocolVersion: negotiatedVersion,
+                    gameSupportsDualShock: gameSupportsDualShock,
+                    serverHidMask: serverHidMask
+                )
             )
             remoteMode = settings.defaultRemoteInputMode
             videoView?.gamepadModeActive = remoteMode != .gamepadMouse

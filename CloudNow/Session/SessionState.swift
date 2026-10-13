@@ -907,6 +907,8 @@ nonisolated struct GameInfo: Identifiable, Equatable, Codable {
     var screenshots: [String]
     var isInLibrary: Bool
     var variants: [GameVariant]
+    /// Controller profiles advertised by the catalog. Older cached games omit this field.
+    var supportedControls: [String]?
 
     /// Whether this game belongs under a store filter. Owned games match only the store they're
     /// owned through; unowned catalog games match any store they're available on.
@@ -976,7 +978,7 @@ extension GameInfo {
     private enum CodingKeys: String, CodingKey {
         case id, title, longDescription, genres, developer, publisher, contentRating
         case boxArtUrl, heroBannerUrl, heroImageUrl, supportedFeatures, screenshots
-        case isInLibrary, variants
+        case isInLibrary, variants, supportedControls
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -995,6 +997,7 @@ extension GameInfo {
         screenshots = try c.decodeIfPresent([String].self, forKey: .screenshots) ?? []
         isInLibrary = try c.decode(Bool.self, forKey: .isInLibrary)
         variants = try c.decode([GameVariant].self, forKey: .variants)
+        supportedControls = try c.decodeIfPresent([String].self, forKey: .supportedControls)
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -1013,6 +1016,7 @@ extension GameInfo {
         try c.encode(screenshots, forKey: .screenshots)
         try c.encode(isInLibrary, forKey: .isInLibrary)
         try c.encode(variants, forKey: .variants)
+        try c.encodeIfPresent(supportedControls, forKey: .supportedControls)
     }
 }
 
@@ -1022,6 +1026,7 @@ nonisolated struct GameVariant: Equatable, Codable {
     var appId: String?
     /// True when GFN reports MANUAL, PLATFORM_SYNC, or IN_LIBRARY for this variant.
     var isOwned: Bool = false
+    var supportedControls: [String]?
 
     @MainActor var storeName: String {
         L10n.storeName(for: appStore)
@@ -1030,7 +1035,7 @@ nonisolated struct GameVariant: Equatable, Codable {
 
 extension GameVariant {
     private enum CodingKeys: String, CodingKey {
-        case id, appStore, appId, isOwned
+        case id, appStore, appId, isOwned, supportedControls
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -1039,6 +1044,7 @@ extension GameVariant {
         appStore = try c.decode(String.self, forKey: .appStore)
         appId = try c.decodeIfPresent(String.self, forKey: .appId)
         isOwned = try c.decodeIfPresent(Bool.self, forKey: .isOwned) ?? false
+        supportedControls = try c.decodeIfPresent([String].self, forKey: .supportedControls)
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -1047,6 +1053,7 @@ extension GameVariant {
         try c.encode(appStore, forKey: .appStore)
         try c.encodeIfPresent(appId, forKey: .appId)
         try c.encode(isOwned, forKey: .isOwned)
+        try c.encodeIfPresent(supportedControls, forKey: .supportedControls)
     }
 }
 

@@ -52,7 +52,7 @@ actor GamesClient {
         apps(vpcId: $vpcId, language: $locale, orderBy: $sortString, first: $fetchCount, after: $cursor, filters: $filters) {
             numberReturned pageInfo { hasNextPage endCursor totalCount }
             items {
-                id title genres
+                id title genres supportedControls
                 images { GAME_BOX_ART TV_BANNER HERO_IMAGE }
                 variants { id appStore supportedControls gfn { status library { status selected } features { __typename ... on GfnSubscriptionFeatureInterface { key } ... on GfnSubscriptionFeatureValue { value } ... on GfnSubscriptionFeatureValueList { values } } } }
                 gfn { playabilityState minimumMembershipTierLabel }
@@ -66,7 +66,7 @@ actor GamesClient {
         apps(vpcId: $vpcId, language: $locale, orderBy: $sortString, first: $fetchCount, after: $cursor, searchQuery: $searchString, filters: $filters) {
             numberReturned pageInfo { hasNextPage endCursor totalCount }
             items {
-                id title genres
+                id title genres supportedControls
                 images { GAME_BOX_ART TV_BANNER HERO_IMAGE }
                 variants { id appStore supportedControls gfn { status library { status selected } features { __typename ... on GfnSubscriptionFeatureInterface { key } ... on GfnSubscriptionFeatureValue { value } ... on GfnSubscriptionFeatureValueList { values } } } }
                 gfn { playabilityState minimumMembershipTierLabel }
@@ -273,7 +273,8 @@ actor GamesClient {
                 id: vid,
                 appStore: v.appStore ?? "unknown",
                 appId: isNumericId(vid) ? vid : nil,
-                isOwned: v.gfn?.library?.isOwned == true
+                isOwned: v.gfn?.library?.isOwned == true,
+                supportedControls: v.supportedControls
             )
         } ?? []
 
@@ -300,7 +301,8 @@ actor GamesClient {
             supportedFeatures: Self.deriveFeatures(from: item.variants),
             screenshots: [],
             isInLibrary: item.variants?.contains { $0.gfn?.library?.isOwned == true } ?? false,
-            variants: variants
+            variants: variants,
+            supportedControls: item.supportedControls
         )
     }
 
@@ -430,7 +432,8 @@ actor GamesClient {
             supportedFeatures: nil,
             screenshots: [],
             isInLibrary: false,
-            variants: variants
+            variants: variants,
+            supportedControls: entry["supportedControls"] as? [String]
         )
     }
 
@@ -448,7 +451,12 @@ actor GamesClient {
                     ?? stringValue(variant["store"])
                     ?? stringValue(variant["launcher"])
                     ?? "GFN"
-                return GameVariant(id: id, appStore: store, appId: isNumericId(id) ? id : nil)
+                return GameVariant(
+                    id: id,
+                    appStore: store,
+                    appId: isNumericId(id) ? id : nil,
+                    supportedControls: variant["supportedControls"] as? [String]
+                )
             }
             if !variants.isEmpty {
                 return variants
@@ -644,7 +652,8 @@ actor GamesClient {
             supportedFeatures: game.supportedFeatures,
             screenshots: screenshots.isEmpty ? game.screenshots : screenshots,
             isInLibrary: game.isInLibrary,
-            variants: game.variants
+            variants: game.variants,
+            supportedControls: game.supportedControls
         )
     }
 
@@ -798,7 +807,12 @@ actor GamesClient {
             guard !appStore.isEmpty, normalizedStore != "unknown", normalizedStore != "none" else {
                 return nil
             }
-            return GameVariant(id: vid, appStore: appStore, appId: isNumericId(vid) ? vid : nil)
+            return GameVariant(
+                id: vid,
+                appStore: appStore,
+                appId: isNumericId(vid) ? vid : nil,
+                supportedControls: v.supportedControls
+            )
         } ?? []
 
         // Move the backend-selected variant to front so variants.first is the default launch store
@@ -829,7 +843,8 @@ actor GamesClient {
             supportedFeatures: nil,
             screenshots: shots,
             isInLibrary: app.variants?.contains { $0.gfn?.library?.selected == true } ?? false,
-            variants: variants
+            variants: variants,
+            supportedControls: app.supportedControls
         )
     }
 
@@ -983,6 +998,7 @@ private nonisolated struct BrowseResponse: Decodable {
             let genres: [String]?
             let images: Images?
             let variants: [Variant]?
+            let supportedControls: [String]?
 
             struct Images: Decodable {
                 let GAME_BOX_ART: String?
@@ -993,6 +1009,7 @@ private nonisolated struct BrowseResponse: Decodable {
             struct Variant: Decodable {
                 let id: String?
                 let appStore: String?
+                let supportedControls: [String]?
                 let gfn: GFNMeta?
                 struct GFNMeta: Decodable {
                     let library: LibraryMeta?
@@ -1058,6 +1075,7 @@ private nonisolated struct AppData: Decodable {
     let contentRatings: ContentRating?
     let images: Images?
     let variants: [Variant]?
+    let supportedControls: [String]?
 
     struct ContentRating: Decodable {
         let type: String?
@@ -1098,6 +1116,7 @@ private nonisolated struct AppData: Decodable {
     struct Variant: Decodable {
         let id: String?
         let appStore: String?
+        let supportedControls: [String]?
         let gfn: GFNMeta?
         struct GFNMeta: Decodable {
             let library: LibraryMeta?

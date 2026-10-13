@@ -899,7 +899,8 @@ class GamesViewModel {
                     ? libraryGame.screenshots
                     : catalogGame.screenshots,
                 isInLibrary: libraryGame.isInLibrary,
-                variants: libraryGame.variants
+                variants: libraryGame.variants,
+                supportedControls: libraryGame.supportedControls ?? catalogGame.supportedControls
             )
         }
     }

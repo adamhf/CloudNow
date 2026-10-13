@@ -109,6 +109,54 @@ struct InputEncoderTests {
         #expect(TestBytes.uint16BE(otherBytes, at: 11) == 1)
     }
 
+    @Test("Sony device changes use the reliable single-event wrapper", arguments: [true, false])
+    func sonyDeviceChange(connected: Bool) throws {
+        let encoder = makeEncoder()
+        encoder.setProtocolVersion(3)
+        let packet = EncodedInputPacket()
+
+        encoder.encodeSonyDeviceChange(controllerId: 3, connected: connected, into: packet)
+
+        let bytes = TestBytes.bytes(of: packet)
+        try #require(bytes.count == 20)
+        #expect(bytes[0] == 0x23)
+        #expect(TestBytes.uint64BE(bytes, at: 1) == timestamp)
+        #expect(bytes[9] == 0x22)
+        try expectBytes(Array(bytes[10...]), equalTo: [18, 0, 0, 0, 9, connected ? 1 : 3, 0, 0, 0, 1])
+    }
+
+    @Test("Sony reports carry their full length without the ordinary gamepad sequence wrapper")
+    func sonyGamepadWrapper() throws {
+        let encoder = makeEncoder()
+        encoder.setProtocolVersion(3)
+        let packet = EncodedInputPacket()
+
+        encoder.encodeSonyGamepad(
+            controllerId: 1,
+            buttons: 0x1008,
+            leftTrigger: 0,
+            rightTrigger: 255,
+            leftStickX: .min,
+            leftStickY: .max,
+            rightStickX: .max,
+            rightStickY: .min,
+            into: packet
+        )
+
+        let bytes = TestBytes.bytes(of: packet)
+        try #require(bytes.count == 83)
+        #expect(bytes[0] == 0x23)
+        #expect(TestBytes.uint64BE(bytes, at: 1) == timestamp)
+        #expect(bytes[9] == 0x21)
+        #expect(TestBytes.uint16BE(bytes, at: 10) == 71)
+        try expectBytes(Array(bytes[12 ... 28]), equalTo: [17, 0, 0, 0, 7, 4, 0, 1, 0, 0, 255, 255, 0x22, 8, 0, 0, 255])
+        #expect(bytes[49] == 11)
+        try expectZeroes(bytes, offsets: Array(29 ... 48) + Array(50 ... 82))
+
+        encoder.encodeHeartbeat(into: packet)
+        try expectBytes(TestBytes.bytes(of: packet), equalTo: [2, 0, 0, 0])
+    }
+
     @Test(
         "Keyboard down and up packets encode modifiers and scan code in network order",
         arguments: [(true, UInt32(3)), (false, UInt32(4))]

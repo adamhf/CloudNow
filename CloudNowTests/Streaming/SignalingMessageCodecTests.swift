@@ -17,6 +17,20 @@ struct SignalingMessageCodecTests {
         #expect(decoded.payload == .offer(sdp: "v=0\r\n"))
     }
 
+    @Test("Preserves the NVST offer capabilities alongside the WebRTC SDP")
+    func decodesNvstOffer() throws {
+        let nvstSdp = "v=0\r\na=ri.hidDeviceMask:4\r\n"
+        let message = try envelope(payload: [
+            "type": "offer",
+            "sdp": "v=0\r\n",
+            "nvstSdp": nvstSdp,
+        ])
+
+        let decoded = try SignalingMessageCodec.decode(message)
+
+        #expect(decoded.payload == .offer(sdp: "v=0\r\n", nvstSdp: nvstSdp))
+    }
+
     @Test("Decodes ICE candidates with optional fields")
     func decodesICECandidate() throws {
         let message = try envelope(payload: [

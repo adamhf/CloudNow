@@ -433,7 +433,7 @@ final class GFNStreamController: NSObject {
         sessionInfo = session
         self.membershipTier = membershipTier
         self.sessionStartedAt = sessionStartedAt
-        gameSupportsDualShock = supportedControls?.contains("DUALSHOCK4_GAMEPAD") == true
+        gameSupportsDualShock = GFNSonyGamepad.gameSupportsSonyInput(supportedControls)
         self.settings = settings
         self.accountAllowsHDR = accountAllowsHDR
         colorState = StreamColorState(

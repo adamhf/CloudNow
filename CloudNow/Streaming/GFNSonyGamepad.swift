@@ -5,6 +5,10 @@ nonisolated enum GFNSonyGamepad {
     static let reportSize = 71
     static let deviceChangeSize = 10
 
+    static func gameSupportsSonyInput(_ supportedControls: [String]?) -> Bool {
+        supportedControls?.contains { $0 == "GAMEPAD" || $0 == "DUALSHOCK4_GAMEPAD" } == true
+    }
+
     static func serverHidMask(in sdp: String?) -> UInt32 {
         guard let sdp else { return 0 }
         for line in sdp.split(whereSeparator: \.isNewline) {

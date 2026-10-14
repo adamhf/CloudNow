@@ -113,6 +113,40 @@ struct GFNSonyGamepadTests {
     }
 
     @Test(
+        "Gamepad catalog metadata permits Sony input while missing or unrelated controls do not",
+        arguments: [
+            (nil, false),
+            ([], false),
+            (["KEYBOARD", "MOUSE"], false),
+            (["UNKNOWN_GAMEPAD"], false),
+            (["DUALSHOCK4_GAMEPAD"], true),
+            (["GAMEPAD"], true),
+            (["KEYBOARD", "MOUSE", "GAMEPAD"], true),
+        ] as [([String]?, Bool)]
+    )
+    func catalogControls(supportedControls: [String]?, expected: Bool) {
+        #expect(GFNSonyGamepad.gameSupportsSonyInput(supportedControls) == expected)
+    }
+
+    @Test(
+        "Generic gamepad metadata still requires protocol 3 and the server DS4 bit",
+        arguments: [
+            (2, UInt32(4), false),
+            (3, 0, false),
+            (3, 1, false),
+            (3, 2, false),
+            (3, 4, true),
+        ]
+    )
+    func genericGamepadCapability(protocolVersion: Int, serverMask: UInt32, expected: Bool) {
+        #expect(GFNSonyGamepad.isSupported(
+            protocolVersion: protocolVersion,
+            gameSupportsDualShock: GFNSonyGamepad.gameSupportsSonyInput(["KEYBOARD", "MOUSE", "GAMEPAD"]),
+            serverHidMask: serverMask
+        ) == expected)
+    }
+
+    @Test(
         "Sony admission requires protocol 3, game permission, and the server DS4 bit",
         arguments: [
             (2, true, UInt32(4), false),

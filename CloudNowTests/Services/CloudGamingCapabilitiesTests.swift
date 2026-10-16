@@ -106,6 +106,7 @@ struct CloudGamingCapabilitiesTests {
         let snapshot = GFNCapabilityAdapter().capabilities
         let input = try #require(snapshot.input.value)
         let microphone = try #require(snapshot.microphone.value)
+        let streamOptions = try #require(snapshot.streamOptions.value)
 
         #expect(snapshot.availability.isSupported)
         #expect(input.maximumControllerSlots == 4)
@@ -114,6 +115,7 @@ struct CloudGamingCapabilitiesTests {
         #expect(!input.controllerFeatures.contains(.share))
         #expect(!microphone.defaultsEnabled)
         #expect(microphone.supportsAutomaticRouteHotSwap)
+        #expect(streamOptions.audioControls == [.automatic, .stereo, .surround51, .surround71])
     }
 
     @Test("GFN stream states adapt without changing native behavior")

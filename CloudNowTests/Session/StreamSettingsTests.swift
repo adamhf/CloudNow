@@ -148,6 +148,30 @@ struct StreamSettingsTests {
         #expect(decoded == StreamSettings())
     }
 
+    @Test("Audio preferences survive settings persistence", arguments: AudioFormatPreference.allCases)
+    func audioPreferencePersistence(format: AudioFormatPreference) throws {
+        var settings = StreamSettings()
+        settings.audioFormat = format
+
+        let encoded = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(StreamSettings.self, from: encoded)
+
+        #expect(decoded.audioFormat == format)
+        #expect(decoded.normalizedForClient.audioFormat == format)
+    }
+
+    @Test(
+        "Explicit audio preferences request their full channel count",
+        arguments: [
+            (AudioFormatPreference.stereo, 2),
+            (.surround51, 6),
+            (.surround71, 8),
+        ]
+    )
+    func explicitAudioChannels(format: AudioFormatPreference, expected: Int) {
+        #expect(format.resolvedChannelCount == expected)
+    }
+
     @Test("Explicit legacy streaming preferences survive new defaults")
     func explicitLegacyStreamingPreferencesSurviveNewDefaults() throws {
         let data = Data(

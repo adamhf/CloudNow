@@ -109,10 +109,14 @@ media evidence. Change one Xbox-owned variable at a time.
     Settings, and launch smoke tests. Confirm tier-neutral copy, filters, focus,
     saved settings, and the expected launch flow.
 12. On a GeForce NOW title, account, server, display, and audio route that expose
-    them, verify H.265 Main10, 5.1 output, microphone permission and route changes,
-    controller input and rumble, and pause HUD behavior. Confirm that unavailable
-    modes follow the established GFN fallback instead of being treated as an Xbox
-    result.
+    them, verify H.265 Main10, 5.1 and 7.1 output, microphone permission and route
+    changes, controller input and rumble, and pause HUD behavior. For 7.1, use
+    Ultimate and a game with channel identification through an eight-channel PCM
+    route; verify front, center, LFE, side, and rear channels separately. Check
+    7.1, 5.1, and stereo negotiation/fallback, resume and reconnect, and microphone
+    route loss/restoration. Confirm Automatic still selects at most 5.1 and Xbox
+    stereo/mono is unchanged. Record physical speaker results separately from HUD
+    channel counts; simulator tests do not prove discrete surround output.
 13. In GeForce NOW Settings, capture and cancel a text-input button combination,
     then save one and adjust its hold delay. Start a stream, open Apple TV text
     entry with the saved combination, send supported text, cancel without sending,

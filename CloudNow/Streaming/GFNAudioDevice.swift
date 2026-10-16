@@ -212,6 +212,7 @@ private nonisolated struct AudioRouteFingerprint: Equatable, Sendable {
 /// Owning the device unlocks:
 /// - true stereo playout of GFN's stereo Opus,
 /// - 5.1 playout of multiopus when the route supports ≥6 output channels,
+/// - 7.1 playout of multiopus when the route supports 8 output channels,
 /// - direct control over the output render quantum (latency).
 ///
 /// Threading contract (RTCAudioDevice.h): all protocol members are called from the native
@@ -223,7 +224,7 @@ final nonisolated class CloudAudioDevice: NSObject, @unchecked Sendable {
 
     let microphoneTelemetry = MicrophoneTelemetry()
 
-    /// Output channels the next stream wants (2 or 6), set from the negotiated offer before
+    /// Output channels the next stream wants (2, 6 or 8), set from the negotiated offer before
     /// playout initializes. The effective count is capped by the active route's capability.
     var requestedOutputChannels = 2
 
@@ -278,33 +279,8 @@ final nonisolated class CloudAudioDevice: NSObject, @unchecked Sendable {
             audioDeviceLog.error("preferred output configuration failed: \(error, privacy: .private)")
         }
         let granted = max(1, session.outputNumberOfChannels)
-        let channels = min(wanted, granted)
-
-        // Above 2 channels an AVAudioFormat needs an explicit layout. MPEG_5_1_A is
-        // L R C LFE Ls Rs — the same 5.1 order WebRTC's multiopus decode delivers.
-        let format: AVAudioFormat?
-        if channels >= 6, let layout = AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_MPEG_5_1_A) {
-            var asbd = AudioStreamBasicDescription(
-                mSampleRate: 48000,
-                mFormatID: kAudioFormatLinearPCM,
-                mFormatFlags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
-                mBytesPerPacket: UInt32(2 * channels),
-                mFramesPerPacket: 1,
-                mBytesPerFrame: UInt32(2 * channels),
-                mChannelsPerFrame: UInt32(channels),
-                mBitsPerChannel: 16,
-                mReserved: 0
-            )
-            format = AVAudioFormat(streamDescription: &asbd, channelLayout: layout)
-        } else {
-            format = AVAudioFormat(
-                commonFormat: .pcmFormatInt16,
-                sampleRate: 48000,
-                channels: AVAudioChannelCount(min(channels, 2)),
-                interleaved: true
-            )
-        }
-        guard let format else {
+        let channels = Self.playoutChannelCount(requested: wanted, available: granted)
+        guard let format = Self.playoutFormat(channels: channels) else {
             audioDeviceLog.error("could not create Int16 playout format (\(channels)ch)")
             return false
         }
@@ -320,7 +296,7 @@ final nonisolated class CloudAudioDevice: NSObject, @unchecked Sendable {
         if channels >= 6 {
             // Surround must bypass the main mixer: AVAudioMixerNode folds multichannel
             // input into the front channels when layouts differ, silencing the rears
-            // while the HDMI output stays 6-channel. The output node maps by layout.
+            // while the HDMI output stays multichannel. The output node maps by layout.
             engine.connect(source, to: engine.outputNode, format: format)
         } else {
             engine.connect(source, to: engine.mainMixerNode, format: format)
@@ -339,6 +315,46 @@ final nonisolated class CloudAudioDevice: NSObject, @unchecked Sendable {
             "playout: \(channels)ch @48kHz (wanted \(wanted), route max \(routeMax), granted \(granted), port \(portChannels)) | route [\(session.currentRoute.outputs.map(\.portName).joined(separator: ", "), privacy: .public)]"
         )
         return true
+    }
+
+    /// Keep the layout and WebRTC pull count consistent if a route grants an
+    /// intermediate count. WebRTC remixes the decoded stream to this output count.
+    static func playoutChannelCount(requested: Int, available: Int) -> Int {
+        let maximum = min(max(1, requested), max(1, available))
+        return [8, 6, 2, 1].first { $0 <= maximum } ?? 1
+    }
+
+    static func playoutFormat(channels: Int) -> AVAudioFormat? {
+        // Above 2 channels an AVAudioFormat needs an explicit layout. MPEG_5_1_A is
+        // L R C LFE Ls Rs — the same 5.1 order WebRTC's multiopus decode delivers.
+        // WebRTC's 7.1 layout appends rear surrounds: MPEG_7_1_C, not the front-wide
+        // MPEG_7_1_A layout. Preserve the side/rear distinction when routing to HDMI.
+        let layoutTag: AudioChannelLayoutTag
+        switch channels {
+        case 8: layoutTag = kAudioChannelLayoutTag_MPEG_7_1_C
+        case 6: layoutTag = kAudioChannelLayoutTag_MPEG_5_1_A
+        case 1, 2:
+            return AVAudioFormat(
+                commonFormat: .pcmFormatInt16,
+                sampleRate: 48000,
+                channels: AVAudioChannelCount(channels),
+                interleaved: true
+            )
+        default: return nil
+        }
+        guard let layout = AVAudioChannelLayout(layoutTag: layoutTag) else { return nil }
+        var asbd = AudioStreamBasicDescription(
+            mSampleRate: 48000,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: UInt32(2 * channels),
+            mFramesPerPacket: 1,
+            mBytesPerFrame: UInt32(2 * channels),
+            mChannelsPerFrame: UInt32(channels),
+            mBitsPerChannel: 16,
+            mReserved: 0
+        )
+        return AVAudioFormat(streamDescription: &asbd, channelLayout: layout)
     }
 
     // MARK: Capture graph (GFN microphone)

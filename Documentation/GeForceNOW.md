@@ -153,7 +153,10 @@ Game audio, microphone behavior, and their user controls are also covered by
 [Streaming settings](StreamingSettings.md#geforce-now-settings). The shared audio
 device preserves the selected session audio mode through resume and restores
 permission-gated microphone capture after a compatible AirPods or Continuity
-Microphone route returns.
+Microphone route returns. Manual 7.1 requests eight channels; playback follows
+the server's negotiated layout, including 5.1 or stereo fallback. Automatic
+continues to request at most 5.1. Discrete 7.1 requires an Ultimate membership,
+a supporting game, and an audio route that carries eight-channel PCM.
 
 ## Input
 

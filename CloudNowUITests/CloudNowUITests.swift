@@ -1180,6 +1180,51 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testSurround71SelectionCommitsAndRestoresSelectedValue() {
+        let app = makeApp()
+        app.launch()
+        openSettings(in: app)
+
+        let audio = element("settings.stream-quality.audio-format", in: app)
+        XCTAssertTrue(audio.waitForExistence(timeout: 3))
+        let focusedAudio = focusedElement(labeled: "Audio Format", in: app)
+        for _ in 0 ..< 30 {
+            if focusedAudio.exists {
+                break
+            }
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(focusedAudio.waitForExistence(timeout: 3))
+        XCUIRemote.shared.press(.select)
+
+        let page = element("settings.stream-quality.audio-format.page", in: app)
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
+        let surround71 = element("settings.stream-quality.audio-format.option.surround71", in: app)
+        XCTAssertTrue(surround71.waitForExistence(timeout: 3))
+        // Clamp to the final option, avoiding stale Form focus queries on CI.
+        for _ in 0 ..< 5 {
+            XCUIRemote.shared.press(.down)
+        }
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(waitForAccessibilityText("7.1 Surround", in: audio))
+
+        XCTAssertTrue(focusedAudio.waitForExistence(timeout: 3))
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
+        XCTAssertTrue(surround71.isSelected)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "gfn-surround-7-1-settings"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        for _ in 0 ..< 3 {
+            XCUIRemote.shared.press(.up)
+        }
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(waitForAccessibilityText("Automatic", in: audio))
+    }
+
+    @MainActor
     func testUnavailableGFNResolutionExplainsWhyWithoutChangingSelection() {
         let app = makeApp(extraArguments: [
             "--cloudnow-ui-gfn-free-membership",

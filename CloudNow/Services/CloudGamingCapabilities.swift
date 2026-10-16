@@ -92,6 +92,7 @@ nonisolated enum CloudAudioControl: String, CaseIterable, Hashable, Sendable {
     case automatic
     case stereo
     case surround51
+    case surround71
 }
 
 nonisolated enum CloudHDRControl: String, CaseIterable, Hashable, Sendable {

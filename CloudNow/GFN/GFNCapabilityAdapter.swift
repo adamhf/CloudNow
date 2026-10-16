@@ -40,7 +40,7 @@ nonisolated struct GFNCapabilityAdapter: CloudGamingCapabilityProviding {
                         .frameRate,
                         .resolution,
                     ],
-                    audioControls: [.automatic, .stereo, .surround51],
+                    audioControls: [.automatic, .stereo, .surround51, .surround71],
                     hdrControls: [.automatic, .hdr, .sdr],
                     supportsServiceConfirmedRegions: true
                 )

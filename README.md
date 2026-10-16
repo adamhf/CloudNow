@@ -111,7 +111,7 @@ compatibility and protocol details.
 | Maximum requested resolution | Up to 5K, subject to account and service eligibility | Automatic up to 1440p; service may adapt lower |
 | Video controls | Resolution, FPS, H.264/H.265/AV1, color mode | Resolution only; service selects the codec |
 | Color and HDR | Automatic, HDR, SDR10, and SDR8 fallback | Automatic only; current validated delivery is SDR8 |
-| Game audio | Automatic, Stereo, and 5.1 Surround | Automatic; current service route is Opus stereo or mono |
+| Game audio | Automatic, Stereo, 5.1 Surround, and 7.1 Surround | Automatic; current service route is Opus stereo or mono |
 | Client bitrate control | Configurable maximum bitrate | None; service-managed bandwidth |
 | Server selection | Automatic, region, or dedicated game server | Service-selected region |
 | Input | Up to four controllers, keyboard/mouse, Siri Remote, and controller text entry for four verified keyboard layouts | Controller and keyboard/mouse; native text entry is not claimed |

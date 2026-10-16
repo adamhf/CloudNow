@@ -184,6 +184,59 @@ struct SDPMungerTests {
         #expect(videoOnce == videoTwice)
     }
 
+    @Test("7.1 preserves the server's channel mapping and microphone section", arguments: ["\n", "\r\n"])
+    func surround71Reconstruction(separator: String) throws {
+        let offer = try TestFixture.string("surround-offer.sdp", subdirectory: "SDP")
+            .replacingOccurrences(of: "multiopus/48000/6", with: "multiopus/48000/8")
+            .replacingOccurrences(
+                of: "channel_mapping=0,4,1,2,3,5;num_streams=4;coupled_streams=2",
+                with: "channel_mapping=0,6,1,2,3,4,5,7;num_streams=5;coupled_streams=3"
+            )
+            .replacingOccurrences(of: "\n", with: separator)
+        let answer = try TestFixture.string("rejected-surround-answer.sdp", subdirectory: "SDP")
+            .replacingOccurrences(of: "\n", with: separator)
+        let result = SDPMunger.mungeAudioAnswer(answer, offer: offer)
+
+        #expect(SDPMunger.audioChannelCount(in: offer) == 8)
+        #expect(result.contains("a=group:BUNDLE game video mic"))
+        #expect(result.contains("a=rtpmap:112 multiopus/48000/8"))
+        #expect(result.contains("channel_mapping=0,6,1,2,3,4,5,7;num_streams=5;coupled_streams=3"))
+        #expect(result.contains("a=mid:mic\(separator)a=sendrecv\(separator)a=rtpmap:111 opus/48000/2"))
+        #expect(result == SDPMunger.mungeAudioAnswer(result, offer: offer))
+    }
+
+    @Test(
+        "Playout follows the offered format, including stereo and 5.1 fallbacks",
+        arguments: [("opus/48000/2", 2), ("multiopus/48000/6", 6), ("multiopus/48000/8", 8)]
+    )
+    func offeredAudioChannels(codec: String, expected: Int) {
+        let offer = """
+        v=0
+        m=audio 9 UDP/TLS/RTP/SAVPF 112
+        a=rtpmap:112 \(codec)
+        m=video 9 UDP/TLS/RTP/SAVPF 96
+        a=rtpmap:96 H264/90000
+        m=audio 9 UDP/TLS/RTP/SAVPF 113
+        a=rtpmap:113 multiopus/48000/8
+        """
+        #expect(SDPMunger.audioChannelCount(in: offer) == expected)
+    }
+
+    @Test(
+        "Unadvertised and unsupported surround payloads do not select an invalid output layout",
+        arguments: ["multiopus/48000/3", "multiopus/48000/32", "multiopus/48000/invalid", "multiopus/16000/8"]
+    )
+    func invalidSurroundChannels(codec: String) {
+        let offer = """
+        m=audio 9 UDP/TLS/RTP/SAVPF 112
+        a=rtpmap:112 \(codec)
+        a=rtpmap:113 multiopus/48000/8
+        """
+        #expect(SDPMunger.audioChannelCount(in: offer) == 2)
+        #expect(SDPMunger.audioChannelCount(in: "m=audio 0 UDP/TLS/RTP/SAVPF 112\na=rtpmap:112 multiopus/48000/8") == 2)
+        #expect(SDPMunger.audioChannelCount(in: "v=0") == 2)
+    }
+
     @Test("Missing or malformed sections fail conservatively")
     func malformedInputRemainsUncorrupted() throws {
         let malformed = try TestFixture.string("malformed.sdp", subdirectory: "SDP")

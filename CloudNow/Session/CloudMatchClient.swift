@@ -206,6 +206,18 @@ private nonisolated func resolutionPixels(for settings: StreamSettings) -> (widt
     return (width, height)
 }
 
+private nonisolated func cloudMatchSurroundAudioInfo(channels: Int) -> Int {
+    // GameStream packs (channelMask << 16) | channels. Standard masks: 5.1 = 0x3F,
+    // 7.1 = 0x63F (front, center, LFE, back and side speakers). See Limelight.h:
+    // https://github.com/moonlight-stream/moonlight-common-c/blob/master/src/Limelight.h
+    // Probe-verified: with 5.1 the server offers multiopus/48000/6 instead of stereo opus.
+    switch channels {
+    case 8: (0x63F << 16) | 8
+    case 6: (0x3F << 16) | 6
+    default: 0 // Preserve the server's stereo default.
+    }
+}
+
 private nonisolated func buildSessionRequestBody(
     _ input: SessionCreateRequest,
     deviceId: String,
@@ -261,10 +273,7 @@ private nonisolated func buildSessionRequestBody(
             ],
             "sdrHdrMode": cloudMatchSdrHdrMode(color),
             "clientDisplayHdrCapabilities": cloudMatchDisplayCapabilities(color),
-            // GameStream encoding (channelMask << 16) | channels: 5.1 = (0x3F << 16) | 6.
-            // 0 (unset) keeps the server's stereo default. Probe-verified: with 5.1 the
-            // server offers multiopus/48000/6 instead of stereo opus.
-            "surroundAudioInfo": audioChannels >= 6 ? 4_128_774 : 0,
+            "surroundAudioInfo": cloudMatchSurroundAudioInfo(channels: audioChannels),
             "remoteControllersBitmap": 0,
             "clientTimezoneOffset": timezoneOffsetMilliseconds,
             "enhancedStreamMode": 1,
@@ -325,7 +334,7 @@ private nonisolated func buildResumeSessionRequestData(
             ["key": "ClientImeSupport", "value": "0"],
             ["key": "surroundAudioInfo", "value": "\(audioChannels)"],
         ],
-        "surroundAudioInfo": audioChannels >= 6 ? 4_128_774 : 0,
+        "surroundAudioInfo": cloudMatchSurroundAudioInfo(channels: audioChannels),
         "clientTimezoneOffset": timezoneOffsetMilliseconds,
         "clientIdentification": "GFN-PC",
         "parentSessionId": NSNull(),

@@ -4,8 +4,15 @@ import Testing
 
 @Suite("CloudMatch session HTTP client")
 struct CloudMatchClientTests {
-    @Test("Session creation maps stream settings into deterministic request fields")
-    func createSessionRequest() async throws {
+    @Test(
+        "Session creation maps stream settings into deterministic request fields",
+        arguments: [
+            (AudioFormatPreference.stereo, 2, 0),
+            (.surround51, 6, 4_128_774),
+            (.surround71, 8, 104_792_072),
+        ]
+    )
+    func createSessionRequest(format: AudioFormatPreference, channels: Int, surroundInfo: Int) async throws {
         let fixture = try NetworkingFixture.data("cloudmatch-session.json")
         let fixedUUID = try #require(UUID(uuidString: "11111111-2222-3333-4444-555555555555"))
         let transport = RecordingHTTPTransport { request, _ in
@@ -28,7 +35,9 @@ struct CloudMatchClientTests {
             let metadata = try #require(session["metaData"] as? [[String: Any]])
             #expect(session["appId"] as? String == "12345")
             #expect(session["deviceHashId"] as? String == "fixture-device")
-            #expect(session["audioMode"] as? Int == 2)
+            #expect(session["audioMode"] as? Int == channels)
+            #expect(session["surroundAudioInfo"] as? Int == surroundInfo)
+            #expect(metadata.first { $0["key"] as? String == "surroundAudioInfo" }?["value"] as? String == "\(channels)")
             #expect(session["clientTimezoneOffset"] as? Int == 3_600_000)
             #expect(session["appLaunchMode"] as? Int == 1)
             #expect(session["enablePersistingInGameSettings"] as? Bool == false)
@@ -57,7 +66,7 @@ struct CloudMatchClientTests {
             timezoneOffsetMilliseconds: { 3_600_000 }
         )
 
-        let session = try await client.createSession(makeSessionRequest())
+        let session = try await client.createSession(makeSessionRequest(audioFormat: format))
 
         #expect(session.sessionId == "fixture-session")
         #expect(session.status == 2)
@@ -247,12 +256,19 @@ struct CloudMatchClientTests {
         )
     }
 
-    @Test("Claim sends a minimal resume body after ready preflight")
-    func claimReadySession() async throws {
+    @Test(
+        "Claim sends a minimal resume body after ready preflight",
+        arguments: [
+            (AudioFormatPreference.stereo, 2, 0),
+            (.surround51, 6, 4_128_774),
+            (.surround71, 8, 104_792_072),
+        ]
+    )
+    func claimReadySession(format: AudioFormatPreference, channels: Int, surroundInfo: Int) async throws {
         let fixture = try NetworkingFixture.data("cloudmatch-session.json")
         let transport = RecordingHTTPTransport { _, _ in StubbedHTTPResponse(data: fixture) }
         var settings = StreamSettings()
-        settings.audioFormat = .stereo
+        settings.audioFormat = format
         settings.keyboardLayout = "en-US"
         settings.gameLanguage = "en-US"
         let client = CloudMatchClient(
@@ -275,6 +291,7 @@ struct CloudMatchClientTests {
         let resume = try #require(requests.last)
         let root = try jsonObject(from: resume)
         let requestData = try #require(root["sessionRequestData"] as? [String: Any])
+        let metadata = try #require(requestData["metaData"] as? [[String: Any]])
 
         #expect(requests.count == 2)
         #expect(resume.httpMethod == "PUT")
@@ -282,6 +299,9 @@ struct CloudMatchClientTests {
         #expect(requestData["appId"] as? Int == 12345)
         #expect(requestData["requestedStreamingFeatures"] == nil)
         #expect(requestData["clientRequestMonitorSettings"] == nil)
+        #expect(requestData["audioMode"] as? Int == channels)
+        #expect(requestData["surroundAudioInfo"] as? Int == surroundInfo)
+        #expect(metadata.first { $0["key"] as? String == "surroundAudioInfo" }?["value"] as? String == "\(channels)")
     }
 
     @Test("Ad event uses injected timestamp and clamps negative durations")
@@ -335,7 +355,7 @@ struct CloudMatchClientTests {
         }
     }
 
-    private func makeSessionRequest() -> SessionCreateRequest {
+    private func makeSessionRequest(audioFormat: AudioFormatPreference = .stereo) -> SessionCreateRequest {
         var settings = StreamSettings()
         settings.resolution = "2560x1440"
         settings.fps = 120
@@ -345,7 +365,7 @@ struct CloudMatchClientTests {
         settings.keyboardLayout = "en-US"
         settings.gameLanguage = "en-US"
         settings.enableL4S = true
-        settings.audioFormat = .stereo
+        settings.audioFormat = audioFormat
         settings.appLaunchMode = .default
         settings.persistInGameSettings = false
         let capabilities = LocalVideoCapabilities(

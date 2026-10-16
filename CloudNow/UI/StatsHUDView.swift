@@ -530,7 +530,11 @@ private struct CoreStatsColumn: View {
     }
 
     private func channelLayoutLabel(_ channels: Int) -> String {
-        channels >= 6 ? L10n.text("surround_5_1") : L10n.text("stereo")
+        switch channels {
+        case 8: L10n.text("surround_7_1")
+        case 6: L10n.text("surround_5_1")
+        default: L10n.text("stereo")
+        }
     }
 }
 

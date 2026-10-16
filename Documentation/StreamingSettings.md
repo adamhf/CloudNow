@@ -67,7 +67,7 @@ preferences, so a newly changed default does not overwrite a previous choice.
 | Frame rate | Known choices remain visible; account, resolution, and display decide availability | No manual control |
 | Codec | H264, H265, AV1 | No manual control |
 | Color and HDR | Automatic, Prefer HDR, Prefer 10-bit SDR, Compatibility SDR | No manual control |
-| Audio layout | Automatic, Stereo, 5.1 Surround | No manual control |
+| Audio layout | Automatic, Stereo, 5.1 Surround, 7.1 Surround | No manual control |
 | Maximum bitrate | 15 to 100 Mbps | No client bitrate cap |
 | L4S | Toggle | Not exposed |
 | Server location | NVIDIA automatic, region, or dedicated server | Service selected |
@@ -89,7 +89,7 @@ preferences, so a newly changed default does not overwrite a previous choice.
 | Frame Rate | 60 fps | The page shows the 30 and 60 fps baselines plus frame rates reported anywhere in the account entitlements. Each choice is evaluated for the selected resolution and current Apple TV output refresh rate. See [Frame-rate eligibility](#frame-rate-eligibility). | Sets the requested frame rate. Delivered FPS can be lower. |
 | Codec | H265 | H264, H265, and AV1 are always selectable. The picker does not hide codecs based on account or device checks. | Sets the requested GFN codec path. H265 is required for the current 10-bit and HDR path. |
 | Color Mode | Automatic | Automatic, Prefer HDR, Prefer 10-bit SDR, and Compatibility SDR are always selectable. Actual requests are capability checked. | Controls the preferred color request and safe fallback. See [Codec, color, and HDR](#codec-color-and-hdr). |
-| Audio Format | Automatic | Automatic, Stereo, and 5.1 Surround are always selectable. | Automatic requests 5.1 when the system maximum output-channel count is at least six. This is a heuristic rather than a reliable sink-capability check, and tvOS can still downmix. |
+| Audio Format | Automatic | Automatic, Stereo, 5.1 Surround, and 7.1 Surround are always selectable. 7.1 requires GeForce NOW Ultimate, a supporting game, and compatible audio equipment. | Automatic remains capped at 5.1, requested when the system maximum output-channel count is at least six. This is a heuristic rather than a reliable sink-capability check. Manual 7.1 requests eight channels; the server can negotiate fewer, and tvOS can downmix. |
 | Keyboard Layout | tvOS-derived locale | CloudNow's supported locale list. | Sends the selected keyboard layout to GFN. This is separate from game language. |
 | Game Language | Automatic | Automatic plus the fixed language list documented in [Using CloudNow](UsingCloudNow.md#game-language). | Automatic maps the tvOS language to an NVIDIA locale. Title support still decides the language delivered in game. |
 | Game Launch Mode | Big Picture | Default or Big Picture | Big Picture requests the TV-oriented launcher mode. Default requests the desktop-style launcher mode. |
@@ -288,13 +288,26 @@ account and title support HDR. Automatic and Prefer HDR can safely fall back.
 The Standard statistics display reports negotiated and decoded results instead
 of treating the preference as proof.
 
-### 5.1 audio is not delivered in GFN
+### Surround audio is not delivered in GFN
 
-Confirm that Apple TV is connected through a surround-capable receiver or
-soundbar. Automatic uses the system maximum output-channel count as a heuristic,
-which is not a reliable report of the physical sink. tvOS can downmix a 5.1
-request. Selecting 5.1 does not force the provider or output route to deliver
-six discrete channels.
+Confirm that the game, membership, and audio equipment support the requested
+layout. NVIDIA requires Ultimate for 7.1; not every game provides surround.
+See [NVIDIA's surround requirements](https://nvidia.custhelp.com/app/answers/detail/a_id/5391).
+Automatic still selects at most 5.1 using the system maximum output-channel count
+as a heuristic, not a verified speaker inventory. Select 7.1 manually to request
+eight channels. The server can negotiate fewer channels, and tvOS can downmix.
+
+For discrete 7.1, connect Apple TV to a receiver's HDMI input and forward video to
+the TV, or use a TV-to-sound-system eARC route that passes eight-channel PCM.
+Standard ARC cannot carry uncompressed 7.1; Dolby Digital 5.1 is a compressed
+alternative. See [HDMI's eARC capabilities](https://www.hdmi.org/spec21sub/enhancedaudioreturnchannel).
+Leave Apple TV's **Change Format** off for multichannel PCM; forcing
+**Dolby Digital 5.1** limits the output to 5.1.
+See [Apple's audio settings](https://support.apple.com/en-gb/102218).
+
+Check the statistics display's negotiated audio channels, then verify individual
+speakers on the physical system. A 7.1 request or HUD label alone does not prove
+eight discrete speakers are playing.
 
 ### L4S causes connection problems
 

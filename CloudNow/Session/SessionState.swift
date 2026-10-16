@@ -368,16 +368,18 @@ nonisolated enum AudioFormatPreference: String, Codable, CaseIterable {
     case automatic
     case stereo
     case surround51
+    case surround71
 
     @MainActor var label: String {
         switch self {
         case .automatic: L10n.text("automatic")
         case .stereo: L10n.text("stereo")
         case .surround51: L10n.text("surround_5_1")
+        case .surround71: L10n.text("surround_7_1")
         }
     }
 
-    /// Output channels to request from GFN (2 or 6). tvOS exposes no reliable sink-capability
+    /// Output channels to request from GFN (2, 6 or 8). tvOS exposes no reliable sink-capability
     /// API (device-verified: the port's channel count reports the currently active format —
     /// always 2 before anything requests more — and maximumOutputNumberOfChannels reports the
     /// OS mixer's 32 on one setup but the sink chain's 8 on another). Automatic therefore
@@ -390,6 +392,8 @@ nonisolated enum AudioFormatPreference: String, Codable, CaseIterable {
             2
         case .surround51:
             6
+        case .surround71:
+            8
         case .automatic:
             AVAudioSession.sharedInstance().maximumOutputNumberOfChannels >= 6 ? 6 : 2
         }

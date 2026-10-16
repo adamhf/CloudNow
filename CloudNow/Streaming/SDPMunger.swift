@@ -135,6 +135,15 @@ enum SDPMunger {
 
     // MARK: - Audio Answer Munging
 
+    /// Use the server's game-audio offer, including a lower-channel fallback, rather
+    /// than the requested preference. The second audio section belongs to the mic.
+    static func audioChannelCount(in offer: String) -> Int {
+        guard let multiopus = multiopusParameters(in: offer),
+              let channels = multiopus.rtpmap.split(separator: "/").last
+        else { return 2 }
+        return Int(channels) ?? 2
+    }
+
     /// Rewrites the first audio section (the GFN game-audio m-line, mid 0) of the answer.
     ///
     /// Stereo offers: strips RED (redundant audio) from the accepted payloads. RED makes
@@ -154,20 +163,26 @@ enum SDPMunger {
         return stripRedFromAudioAnswer(answer, sep: sep)
     }
 
-    /// Payload number, rtpmap suffix (e.g. "multiopus/48000/6") and fmtp params of the
-    /// offer's multiopus codec, or nil for stereo offers.
+    /// Payload number, rtpmap suffix and fmtp params of the first audio section's
+    /// supported multiopus codec, or nil for stereo offers.
     private static func multiopusParameters(in offer: String) -> (pt: String, rtpmap: String, fmtp: String)? {
-        let offerSep = offer.contains("\r\n") ? "\r\n" : "\n"
-        let lines = offer.components(separatedBy: offerSep)
-        guard let rtpmapLine = lines.first(where: { $0.hasPrefix("a=rtpmap:") && $0.contains("multiopus/") }) else {
-            return nil
-        }
+        let lines = offer.components(separatedBy: .newlines).filter { !$0.isEmpty }
+        guard let start = lines.firstIndex(where: { $0.hasPrefix("m=audio ") }) else { return nil }
+        let section = lines[(start + 1)...].prefix { !$0.hasPrefix("m=") }
+        let media = lines[start].split(separator: " ")
+        guard media.count > 3, media[1] != "0" else { return nil }
+        let payloads = Set(media.dropFirst(3).map(String.init))
+        guard let rtpmapLine = section.first(where: {
+            $0.hasPrefix("a=rtpmap:") && $0.contains(" multiopus/48000/")
+                && attributeLinePT($0).map(payloads.contains) == true
+        }) else { return nil }
         let rest = String(rtpmapLine.dropFirst("a=rtpmap:".count))
         let parts = rest.components(separatedBy: " ")
         guard parts.count >= 2 else { return nil }
         let pt = parts[0]
         let rtpmap = parts[1]
-        let fmtp = lines.first(where: { $0.hasPrefix("a=fmtp:\(pt) ") })
+        guard rtpmap == "multiopus/48000/6" || rtpmap == "multiopus/48000/8" else { return nil }
+        let fmtp = section.first(where: { $0.hasPrefix("a=fmtp:\(pt) ") })
             .map { String($0.dropFirst("a=fmtp:\(pt) ".count)) } ?? ""
         return (pt: pt, rtpmap: rtpmap, fmtp: fmtp)
     }

@@ -1049,17 +1049,18 @@ final class GFNStreamController: NSObject {
             gfnLog.debug("[Stream] Offer SDP (\(sdp.count, privacy: .public) chars):\n\(sdp, privacy: .private)")
         #endif
 
-        // The server offers multiopus/48000/6 when the session requested 5.1 (see
-        // CloudMatchClient surroundAudioInfo); the offer is the single source of truth
+        // The server offers multiopus for surround (see CloudMatchClient
+        // surroundAudioInfo); the offer is the single source of truth
         // for the playout channel count. Must be set before the peer connection exists
         // so the audio device initializes with the right graph.
-        let surroundOffered = sdp.contains("multiopus/")
-        GFNAudioDevice.shared.requestedOutputChannels = surroundOffered ? 6 : 2
+        let audioChannels = SDPMunger.audioChannelCount(in: sdp)
+        let audioCodec = audioChannels > 2 ? "Multiopus" : "Opus"
+        GFNAudioDevice.shared.requestedOutputChannels = audioChannels
         updateAudioStats {
-            $0.codecName = surroundOffered ? "Multiopus" : "Opus"
-            $0.codecChannels = surroundOffered ? 6 : 2
+            $0.codecName = audioCodec
+            $0.codecChannels = audioChannels
         }
-        audioSyncLog.info("offer audio: \(surroundOffered ? "multiopus 5.1" : "opus stereo", privacy: .public)")
+        audioSyncLog.info("offer audio: \(audioCodec, privacy: .public) \(audioChannels)ch")
 
         var effectiveMicrophoneEnabled = microphoneAuthorizedForConnection
         let microphoneRouteReady = configureAudioSession(

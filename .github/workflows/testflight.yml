@@ -171,7 +171,7 @@ jobs:
       - name: Verify Xcode upload tool before loading secrets
         run: |
           set -euo pipefail
-          help="$(xcrun altool --help)"
+          help="$(xcrun altool --help 2>&1)"
           for option in --upload-package --api-key-subject --p8-file-path; do
             [[ "$help" == *"$option"* ]] || { echo "::error::Xcode altool is missing a required upload option."; exit 1; }
           done

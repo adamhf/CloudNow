@@ -32,6 +32,13 @@ struct GameDetailView: View {
     @State private var availabilityLoading = false
     @State private var availabilityRevision = 0
     @State private var availabilityRequestID: UUID?
+    @State private var installToPlayInfo: GameInfo?
+    @State private var installToPlayInfoFailed = false
+    @State private var installToPlayInfoLoading = false
+    @State private var pendingOwnership: GameVariant?
+    @State private var ownershipUpdateFailed = false
+    @State private var showStore = false
+    @State private var showStoreConnections = false
 
     private struct AvailabilityRequest: Hashable {
         let gameId: String
@@ -39,8 +46,30 @@ struct GameDetailView: View {
         let active: Bool
     }
 
+    private var effectiveGame: GameInfo {
+        installToPlayInfo ?? game
+    }
+
+    private var selectedVariant: GameVariant? {
+        viewModel.gameWithPreferredStore(effectiveGame).variants.first
+    }
+
+    private var supportsOwnershipManagement: Bool {
+        authManager.session?.provider.isNvidiaDirect == true
+    }
+
+    private var selectedGameIsOwned: Bool {
+        supportsOwnershipManagement ? selectedVariant?.isOwned == true : effectiveGame.isInLibrary
+    }
+
+    private var ownershipActionsDisabled: Bool {
+        installToPlayInfoLoading || viewModel.isUpdatingGameOwnership
+            || viewModel.storeConnections.isBusy || viewModel.isFullLibraryRefreshRunning
+            || viewModel.libraryLoadPhase != .loaded || viewModel.isLoading
+    }
+
     private var selectedAvailability: GFNGameAvailability? {
-        guard let variant = viewModel.gameWithPreferredStore(game).variants.first else { return nil }
+        guard let variant = selectedVariant else { return nil }
         return availabilityByVariant[variant.id] ?? (didLoadAvailability ? nil : variant.availability)
     }
 
@@ -48,9 +77,34 @@ struct GameDetailView: View {
         didLoadAvailability && !availabilityFailed && selectedAvailability?.isUnavailable == true
     }
 
+    private var isInstallToPlay: Bool {
+        (installToPlayInfo?.playType ?? game.playType) == .installToPlay
+    }
+
+    private var selectedInstallVariant: GameVariant? {
+        guard var variant = viewModel.gameWithPreferredStore(effectiveGame).variants.first else { return nil }
+        if installToPlayInfo != nil, !installToPlayInfoLoading, !installToPlayInfoFailed {
+            return variant
+        }
+        variant.isInstalled = nil
+        return variant
+    }
+
+    private var playActionTitle: String {
+        guard isInstallToPlay else { return L10n.text("play") }
+        switch selectedInstallVariant?.isInstalled {
+        case true: return L10n.text("play")
+        case false: return L10n.text("install_game")
+        default: return L10n.text("open_in_steam")
+        }
+    }
+
     private enum DetailFocus: Hashable {
         case play
         case favorite
+        case ownership
+        case store
+        case connections
         case about
         case details
         case availability
@@ -67,8 +121,11 @@ struct GameDetailView: View {
     }
 
     private var preferredFocusTarget: DetailFocus {
-        if game.isInLibrary {
+        if selectedGameIsOwned {
             return isSelectedGameUnavailable ? .favorite : .play
+        }
+        if supportsOwnershipManagement, selectedVariant != nil {
+            return .ownership
         }
         if let description = game.longDescription, !description.isEmpty {
             return .about
@@ -86,7 +143,9 @@ struct GameDetailView: View {
             game.developer.map { ("Developer", $0) },
             game.publisher.flatMap { $0 != game.developer ? ("Publisher", $0) : nil },
             genres.isEmpty ? nil : ("Genres", genres.joined(separator: ", ")),
-            game.variants.isEmpty ? nil : ("Available on", game.variants.map(\.storeName).joined(separator: ", ")),
+            effectiveGame.variants.isEmpty
+                ? nil
+                : ("Available on", effectiveGame.variants.map(\.storeName).joined(separator: ", ")),
         ].compactMap { $0 }
     }
 
@@ -103,11 +162,80 @@ struct GameDetailView: View {
         .task(id: AvailabilityRequest(gameId: game.id, revision: availabilityRevision, active: scenePhase == .active)) {
             guard !isEmbeddedCarousel, scenePhase == .active else { return }
             await refreshAvailability()
+            if authManager.session?.provider.isNvidiaDirect == true {
+                await refreshInstallToPlayInfo()
+            }
         }
         .onChange(of: isSelectedGameUnavailable) { _, unavailable in
             if unavailable, focusedElement == .play {
                 focusedElement = .favorite
             }
+        }
+        .fullScreenCover(isPresented: $showStore) {
+            if let variant = selectedVariant, let url = variant.storeURL {
+                GameStoreView(gameTitle: game.title, storeName: variant.storeName, url: url)
+            }
+        }
+        .fullScreenCover(
+            isPresented: $showStoreConnections,
+            onDismiss: { availabilityRevision += 1 },
+            content: {
+                NavigationStack {
+                    StoreConnectionsView()
+                }
+            }
+        )
+        .alert(
+            L10n.text(pendingOwnership?.isOwned == true ? "unmark_as_owned" : "mark_as_owned"),
+            isPresented: ownershipConfirmationIsPresented,
+            presenting: pendingOwnership
+        ) { variant in
+            Button(
+                L10n.text(variant.isOwned ? "unmark_as_owned" : "mark_as_owned"),
+                role: variant.isOwned ? .destructive : nil
+            ) {
+                pendingOwnership = nil
+                Task { await updateOwnership(variant) }
+            }
+            Button(L10n.text("cancel"), role: .cancel) {
+                pendingOwnership = nil
+            }
+        } message: { variant in
+            Text(L10n.format(
+                variant.isOwned ? "unmark_as_owned_message" : "mark_as_owned_message",
+                variant.storeName
+            ))
+        }
+    }
+
+    private var ownershipConfirmationIsPresented: Binding<Bool> {
+        Binding(
+            get: { pendingOwnership != nil },
+            set: {
+                if !$0 {
+                    pendingOwnership = nil
+                }
+            }
+        )
+    }
+
+    private func updateOwnership(_ variant: GameVariant) async {
+        guard !ownershipActionsDisabled else { return }
+        ownershipUpdateFailed = false
+        do {
+            installToPlayInfo = try await viewModel.setGameOwnership(
+                for: effectiveGame,
+                variantId: variant.id,
+                owned: !variant.isOwned,
+                authManager: authManager
+            )
+            installToPlayInfoFailed = false
+            focusedElement = preferredFocusTarget
+        } catch is CancellationError {
+            return
+        } catch {
+            ownershipUpdateFailed = true
+            focusedElement = .availability
         }
     }
 
@@ -131,6 +259,39 @@ struct GameDetailView: View {
         } catch {
             guard !Task.isCancelled else { return }
             availabilityFailed = true
+        }
+    }
+
+    private func refreshInstallToPlayInfo() async {
+        guard !Task.isCancelled, !viewModel.isUpdatingGameOwnership else { return }
+        installToPlayInfoFailed = false
+        installToPlayInfoLoading = true
+        defer {
+            if !Task.isCancelled {
+                installToPlayInfoLoading = false
+            }
+        }
+        do {
+            let updated: GameInfo? = if ownershipUpdateFailed {
+                try await viewModel.refreshGameOwnership(for: effectiveGame, authManager: authManager)
+            } else {
+                try await viewModel.fetchGameLaunchInfo(for: game, authManager: authManager)
+            }
+            try Task.checkCancellation()
+            if var updated {
+                if updated.playType == nil || updated.playType == .unknown {
+                    updated.playType = effectiveGame.playType
+                }
+                installToPlayInfo = updated
+                ownershipUpdateFailed = false
+            } else {
+                installToPlayInfoFailed = supportsOwnershipManagement
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled else { return }
+            installToPlayInfoFailed = supportsOwnershipManagement
         }
     }
 
@@ -233,7 +394,7 @@ struct GameDetailView: View {
 
     private func handleFocusChange(_ focus: DetailFocus?, proxy: ScrollViewProxy) {
         switch focus {
-        case .play, .favorite, .availability, .variant:
+        case .play, .favorite, .ownership, .store, .connections, .availability, .variant:
             backgroundBlurred = false
             withAnimation(reduceMotion ? nil : .smooth) {
                 proxy.scrollTo("hero", anchor: .top)
@@ -314,6 +475,7 @@ struct GameDetailView: View {
 
                     genreLine
                     subscriptionLabels
+                    installToPlayNotice
 
                     if let desc = game.longDescription, !desc.isEmpty {
                         Text(desc)
@@ -323,8 +485,8 @@ struct GameDetailView: View {
                             .frame(maxWidth: 560, alignment: .leading)
                     }
 
-                    if game.isInLibrary {
-                        Label("In Library", systemImage: "checkmark.circle.fill")
+                    if selectedGameIsOwned {
+                        Label(L10n.text("in_library"), systemImage: "checkmark.circle.fill")
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.green)
                     } else {
@@ -335,32 +497,7 @@ struct GameDetailView: View {
 
                     availabilityNotice
 
-                    if game.isInLibrary {
-                        HStack(spacing: 16) {
-                            Button {
-                                onPlay(viewModel.gameWithPreferredStore(game))
-                            } label: {
-                                Label("Play", systemImage: "play.fill")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.green)
-                            .disabled(isSelectedGameUnavailable)
-                            .focused($focusedElement, equals: .play)
-
-                            let isFav = viewModel.favoriteIds.contains(game.id)
-                            Button {
-                                viewModel.toggleFavorite(game.id)
-                            } label: {
-                                Label(
-                                    isFav ? "Remove from Favorites" : "Add to Favorites",
-                                    systemImage: isFav ? "star.fill" : "star"
-                                )
-                            }
-                            .buttonStyle(.bordered)
-                            .focused($focusedElement, equals: .favorite)
-                        }
-                        .allowsHitTesting(!isEmbeddedCarousel)
-                    }
+                    gameActions
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -371,6 +508,104 @@ struct GameDetailView: View {
         }
         .containerRelativeFrame(.vertical)
         .frame(maxWidth: .infinity)
+    }
+
+    private var gameActions: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 16) {
+                if selectedGameIsOwned {
+                    Button {
+                        onPlay(viewModel.gameWithPreferredStore(effectiveGame))
+                    } label: {
+                        Label(
+                            playActionTitle,
+                            systemImage: isInstallToPlay && selectedInstallVariant?.isInstalled != true
+                                ? "arrow.down.circle.fill"
+                                : "play.fill"
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .disabled(isSelectedGameUnavailable || viewModel.isUpdatingGameOwnership || ownershipUpdateFailed)
+                    .focused($focusedElement, equals: .play)
+
+                    let isFav = viewModel.favoriteIds.contains(game.id)
+                    Button {
+                        viewModel.toggleFavorite(game.id)
+                    } label: {
+                        Label(
+                            isFav ? "Remove from Favorites" : "Add to Favorites",
+                            systemImage: isFav ? "star.fill" : "star"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .focused($focusedElement, equals: .favorite)
+                } else if supportsOwnershipManagement, let variant = selectedVariant {
+                    Button {
+                        pendingOwnership = variant
+                    } label: {
+                        Label(L10n.text("mark_as_owned"), systemImage: "plus.circle")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .disabled(ownershipActionsDisabled || ownershipUpdateFailed)
+                    .focused($focusedElement, equals: .ownership)
+                    .accessibilityIdentifier("game-mark-as-owned")
+                }
+
+                if viewModel.isUpdatingGameOwnership {
+                    ProgressView()
+                }
+            }
+
+            if supportsOwnershipManagement {
+                ownershipActions
+            }
+        }
+        .allowsHitTesting(!isEmbeddedCarousel)
+    }
+
+    private var ownershipActions: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 16) {
+                if let variant = selectedVariant, variant.storeURL != nil {
+                    Button {
+                        showStore = true
+                    } label: {
+                        Label(L10n.format("view_in_store", variant.storeName), systemImage: "qrcode")
+                    }
+                    .focused($focusedElement, equals: .store)
+                    .accessibilityIdentifier("game-view-in-store")
+                }
+
+                Button {
+                    showStoreConnections = true
+                } label: {
+                    Label(L10n.text("connected_stores"), systemImage: "link")
+                }
+                .focused($focusedElement, equals: .connections)
+                .accessibilityIdentifier("game-connected-stores")
+
+                if let variant = selectedVariant, variant.isManuallyOwned {
+                    Button {
+                        pendingOwnership = variant
+                    } label: {
+                        Label(L10n.text("unmark_as_owned"), systemImage: "minus.circle")
+                    }
+                    .focused($focusedElement, equals: .ownership)
+                    .disabled(ownershipActionsDisabled || ownershipUpdateFailed)
+                    .accessibilityIdentifier("game-unmark-as-owned")
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(installToPlayInfoLoading || viewModel.isUpdatingGameOwnership)
+
+            if !installToPlayInfoLoading, selectedVariant?.storeURL == nil {
+                Text(L10n.text("game_store_unavailable"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     // MARK: Screenshots
@@ -385,13 +620,23 @@ struct GameDetailView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
-        if !isEmbeddedCarousel, selectedAvailability?.isUnavailable == true || availabilityFailed {
+        if ownershipUpdateFailed {
+            Text(L10n.text("ownership_update_failed"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        if !isEmbeddedCarousel,
+           selectedAvailability?.isUnavailable == true || availabilityFailed || installToPlayInfoFailed || ownershipUpdateFailed
+        {
             Button {
                 availabilityRevision += 1
             } label: {
-                Label(L10n.text("gfn_game_check_status"), systemImage: "arrow.clockwise")
+                Label(
+                    L10n.text(ownershipUpdateFailed ? "refresh_library_status" : "gfn_game_check_status"),
+                    systemImage: "arrow.clockwise"
+                )
             }
-            .disabled(availabilityLoading)
+            .disabled(availabilityLoading || installToPlayInfoLoading || viewModel.isUpdatingGameOwnership)
             .focused($focusedElement, equals: .availability)
         }
     }
@@ -510,10 +755,52 @@ struct GameDetailView: View {
 
     // MARK: Right column
 
+    @ViewBuilder
+    private var installToPlayNotice: some View {
+        if isInstallToPlay {
+            VStack(alignment: .leading, spacing: 6) {
+                Label(L10n.text("install_to_play"), systemImage: "arrow.down.circle")
+                    .font(.callout.weight(.semibold))
+                if let size = selectedInstallVariant?.minimumSizeInBytes, size > 0 {
+                    Text(L10n.format(
+                        "install_to_play_minimum_size",
+                        ByteCountFormatter.string(fromByteCount: size, countStyle: .binary)
+                    ))
+                }
+                if !installToPlayInfoLoading, !installToPlayInfoFailed,
+                   installToPlayInfo?.playabilityState == "UNPLAYABLE_DUE_TO_UPGRADE"
+                {
+                    if let tier = installToPlayInfo?.minimumMembershipTierLabel, !tier.isEmpty {
+                        Text(L10n.format("install_to_play_requires_membership", tier))
+                    } else {
+                        Text(L10n.text("not_eligible"))
+                    }
+                }
+                if viewModel.subscription?.cloudStorage?.isPersistent != true {
+                    Text(L10n.text("install_to_play_session_warning"))
+                }
+                if selectedInstallVariant?.cloudSaveSupported == false {
+                    Text(L10n.text("install_to_play_save_warning"))
+                }
+                if installToPlayInfoLoading {
+                    Text(L10n.text("install_to_play_checking"))
+                } else if installToPlayInfoFailed {
+                    Text(L10n.text("install_to_play_status_failed"))
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.85))
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: 560, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("game-install-to-play")
+        }
+    }
+
     private var subscriptionLabels: some View {
-        let variants = game.isInLibrary
-            ? Array(viewModel.gameWithPreferredStore(game).variants.prefix(1))
-            : game.variants
+        let variants = supportsOwnershipManagement || effectiveGame.isInLibrary
+            ? Array(viewModel.gameWithPreferredStore(effectiveGame).variants.prefix(1))
+            : effectiveGame.variants
         return VStack(alignment: .leading, spacing: 6) {
             ForEach(variants, id: \.id) { variant in
                 if let subscriptions = variant.subscriptions, !subscriptions.isEmpty {
@@ -547,7 +834,7 @@ struct GameDetailView: View {
             if let rating = game.contentRating {
                 rightInfo("Rating", rating)
             }
-            if game.variants.count > 1, game.isInLibrary {
+            if effectiveGame.variants.count > 1, supportsOwnershipManagement || effectiveGame.isInLibrary {
                 Divider()
                     .overlay(Color.white.opacity(0.35))
                     .frame(width: 200)
@@ -575,8 +862,8 @@ struct GameDetailView: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.6))
                 .kerning(1)
-            ForEach(game.variants, id: \.id) { variant in
-                let isSelected = viewModel.preferredVariantId(for: game) == variant.id
+            ForEach(effectiveGame.variants, id: \.id) { variant in
+                let isSelected = viewModel.gameWithPreferredStore(effectiveGame).variants.first?.id == variant.id
                 Button {
                     viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
                 } label: {
@@ -594,6 +881,7 @@ struct GameDetailView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .disabled(viewModel.isUpdatingGameOwnership)
                 .focused($focusedElement, equals: .variant(variant.id))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }

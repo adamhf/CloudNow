@@ -45,11 +45,12 @@ including games outside the library and games without subscription metadata.
 Duplicate store names appear only once; up to two fit on the row, with `+N` for
 additional stores. A separate, secondary row beside a ticket icon shows the
 first subscription name and `+N` for additional subscriptions when NVIDIA
-supplies per-variant metadata. Full store and subscription lists remain in game
+supplies per-variant metadata. Install-to-Play games add a third, conditional
+metadata row with a download icon. Full store and subscription lists remain in game
 details and accessibility descriptions.
 The footer hides when focus leaves; game titles and library status badges remain
-visible. Details show subscriptions for
-the selected launch store; games outside the library list the eligible stores.
+visible. Details show subscriptions for the selected store, including games
+outside the library.
 These labels describe catalog inclusion, not the account's active subscriptions
 or ownership. Library subscription filters consider owned variants. Combining a
 store and subscription filter requires both to match the same variant.
@@ -68,6 +69,71 @@ The library synchronization route follows a provider web contract that may
 change. CloudNow validates the response and falls back to Reload Library when
 discovery or schema checks fail. Only connected accounts with provider-reported
 sync support are synchronized.
+
+### Adding games to the library
+
+Game details offer **Mark as Owned** for an unowned store variant. The confirmation
+asks the user to confirm ownership on the selected store; it does not purchase a
+game license or bypass GeForce NOW membership and storage requirements. Actions
+follow the selected variant, so owning a game on one store does not imply owning
+it on another.
+
+**View in Steam** or the equivalent store action displays a QR code for the
+provider's game-store URL. Users buy or claim the game on their phone, then use
+**Connected Stores** to link their account or resync their library. If a game is
+still missing, including a free game or demo that store sync does not report,
+they can return and mark it as owned. The action does not infer pricing from
+catalog filters. A missing or invalid store URL is reported instead of generating
+a link from the NVIDIA variant ID.
+
+CloudNow submits ownership changes to NVIDIA and reloads authoritative library
+state before updating the game, library membership, and cached ownership. It does
+not treat a mutation acknowledgement alone as ownership confirmation. If the
+result cannot be confirmed, **Refresh Library Status** checks the current state
+before another attempt. Account changes invalidate pending results.
+
+**Unmark as Owned** removes a manual ownership mark after confirmation; it does
+not remove the game from the store account. Store-synced ownership continues to
+use the existing synchronization flow. Once ownership is confirmed, the selected
+variant offers its normal **Play**, **Install**, or **Open in Steam** action.
+These controls use NVIDIA's direct GeForce NOW service and do not change Xbox
+Cloud Gaming.
+
+### Install-to-Play
+
+NVIDIA's `gfn.playType` classifies games as Ready-to-Play or Install-to-Play.
+Library and Store provide a **Play Type** filter when the catalog reports these
+values. Unknown or missing values remain unclassified; public catalog optimization
+flags are not used to guess installation requirements.
+
+Game details show the selected store's minimum installation size and warn about
+single-session installations and games without Steam Cloud saves. The action
+reads **Install**, **Play**, or **Open in Steam**, according to fresh provider
+installation metadata. Installation happens in streamed Steam on the GFN cloud
+PC, using the existing controller, remote pointer and text input. Connecting Steam
+and syncing the library does not replace signing into streamed Steam.
+
+For direct NVIDIA accounts, **Settings > Library > Install-to-Play** refreshes
+membership access and cloud-storage information. Capacity, usage and storage
+location appear only when reported by the membership service. **Manage Cloud
+Storage** displays a QR code for NVIDIA's official account page; purchases and
+storage changes happen there. Refreshing the page reloads account status.
+
+New Install-to-Play sessions check current game playability, storage entitlement
+and known available capacity. Exhausted monthly playtime alone does not block
+installation. Capacity checks use healthy storage metadata; storage-status errors
+are left to the service to resolve. A resolved persistent-storage region takes
+precedence over ordinary server preferences without changing the saved preference.
+Single-session storage and unresolved regions retain ordinary routing, matching
+NVIDIA's client. Existing sessions resume on their saved route. Unconfirmed
+storage entitlement or insufficient capacity produces an actionable error.
+
+Account eligibility and installed-game state are excluded from the shared catalog
+cache. The integration uses NVIDIA's web contracts, including
+`addons[type=STORAGE]` and its `PERMANENT_STORAGE` / `EPHEMERAL_STORAGE` subtype;
+it does not infer access from membership names or store subscription labels.
+Unsupported catalog fields are omitted on retry for older regional schemas.
+Install-to-Play launching is limited to direct NVIDIA accounts.
 
 ### Connected stores
 
@@ -147,7 +213,18 @@ stale, CloudNow stops the resulting server session instead of leaving it orphane
 Queue and provisioning states remain visible while the provider prepares a
 session. When the provider requires queue advertising, CloudNow plays the supplied
 media and reports its lifecycle to CloudMatch. Leave can retain a resumable server
-session. End explicitly stops the server session and clears local ownership.
+session. End closes playback immediately and confirms server termination in the
+background using the session-control endpoint, independently of the media host.
+A new launch shows cleanup progress and waits for that same operation before
+resuming or creating a session. Failed cleanup retains ownership for retry;
+confirmed cleanup clears only the ended session's resume metadata. Confirmation
+uses a successful, uncached provider active-session list with the ended session
+absent. Lingering individual session records do not delay a new launch or provider
+switch; failed or incomplete list responses keep cleanup pending.
+User-requested launches and resumes keep polling through queue and preparation
+until cancellation or a service error, without an overall setup deadline. The
+loading message follows the server setup stage, including previous-session
+cleanup, then changes to “Connecting to your session…” when readiness is confirmed.
 
 Reconnect work is cancellable and bound to the active connection generation.
 Callbacks from an older peer, signaling socket, renderer, input path, or

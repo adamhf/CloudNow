@@ -5,8 +5,10 @@ private let streamLog = Logger(subsystem: "com.owenselles.CloudNow2", category: 
 
 private enum LoadingPhase: Equatable {
     case finding
+    case cleaningUp
     case inQueue(Int?)
     case preparing
+    case connecting
     case timedOut
 }
 
@@ -65,7 +67,6 @@ struct StreamView: View {
     @State private var serverSessionLease: CloudServerSessionLease?
     @State private var localPeerLease: CloudLocalPeerLease?
     @State private var isEndingSession = false
-    @State private var endConfirmationFailed = false
     /// Per-ad state tracking to avoid duplicate reports
     @State private var adReportedAction: [String: AdAction] = [:]
 
@@ -363,6 +364,8 @@ struct StreamView: View {
         switch loadingPhase {
         case .finding:
             return L10n.text("connecting_to_server")
+        case .cleaningUp:
+            return L10n.text("previous_session_cleanup")
         case let .inQueue(pos):
             if let pos {
                 return L10n.format("in_queue_position", pos)
@@ -370,17 +373,19 @@ struct StreamView: View {
             return L10n.text("in_queue")
         case .preparing:
             return (createdSession?.setupStage ?? .configuring).label
+        case .connecting:
+            return L10n.text("connecting_to_session")
         case .timedOut:
             return L10n.text("server_took_too_long")
         }
     }
 
     /// Determinate bar once the server gives us a queue position or setup stage; the earliest
-    /// "finding" moment (and the timed-out state) has no forward signal, so it stays a spinner —
-    /// matching the official client, which is indeterminate until an ETA arrives.
+    /// "finding" moment and final connection have no forward signal, so they use a spinner.
+    /// The timed-out state hides progress entirely.
     private var showDeterminateProgress: Bool {
         switch loadingPhase {
-        case .finding, .timedOut: false
+        case .finding, .cleaningUp, .connecting, .timedOut: false
         case .inQueue, .preparing: true
         }
     }
@@ -642,11 +647,7 @@ struct StreamView: View {
                 .multilineTextAlignment(.center)
             HStack(spacing: 24) {
                 Button(L10n.text("retry")) {
-                    if endConfirmationFailed {
-                        disconnect()
-                    } else {
-                        retrySessionAttempt()
-                    }
+                    retrySessionAttempt()
                 }
                 .buttonStyle(.bordered)
                 .tint(.blue)
@@ -692,7 +693,6 @@ struct StreamView: View {
     // MARK: Actions
 
     private func retrySessionAttempt() {
-        endConfirmationFailed = false
         sessionOrchestrator.cancelAttempt()
         sessionAttemptState.retry()
     }
@@ -725,6 +725,29 @@ struct StreamView: View {
             generation: generation,
             orchestrationAttempt: orchestrationAttempt
         )
+
+        // A previous player can dismiss while its server allocation is ending.
+        // Join that cleanup before resuming or creating another allocation.
+        var directSession = directSession
+        var existingSession = existingSession
+        if let pending = cloudSessionCoordinator.sessionPendingEnd,
+           pending.provider == .geForceNow
+        {
+            loadingPhase = .cleaningUp
+            let didEnd = await cloudSessionCoordinator.endServerSessionUsingProvider(pending)
+            guard isCurrentSessionAttempt(generation) else { return }
+            guard didEnd else {
+                streamController.fail(with: L10n.text("previous_session_still_active"))
+                return
+            }
+            viewModel.markSessionStopped(pending.serverSessionID)
+            if directSession?.sessionId == pending.serverSessionID {
+                directSession = nil
+            }
+            if existingSession?.sessionId == pending.serverSessionID {
+                existingSession = nil
+            }
+        }
 
         // Reconnect path — RESUME PUT tells the server to rebuild its media endpoint,
         // then connect WebRTC as soon as we get a single status 2/3 (no double-poll wait).
@@ -764,14 +787,14 @@ struct StreamView: View {
                     return
                 }
 
-                // A reclaimed media endpoint needs one ready response. Queue waiting remains
-                // unbounded; the 60-second deadline begins only after the queue clears.
+                // A reclaimed media endpoint needs one ready response. A user-requested resume
+                // waits through queue and setup until cancellation or a service error.
                 sessionInfo = try await sessionOrchestrator.waitUntilReady(
                     initialSession: sessionInfo,
                     token: token,
                     attempt: orchestrationAttempt,
                     requiredReadyResponses: 1,
-                    setupTimeout: 60
+                    setupTimeout: nil
                 ) { session, readiness in
                     applyOrchestrationUpdate(
                         session: session,
@@ -798,6 +821,10 @@ struct StreamView: View {
                 )
                 return
             } catch is CancellationError {
+                return
+            } catch SessionOrchestrationError.sessionEnded {
+                guard isCurrentSessionAttempt(generation) else { return }
+                streamController.fail(with: L10n.text("session_ended"))
                 return
             } catch SessionOrchestrationError.setupTimedOut {
                 guard isCurrentSessionAttempt(generation) else { return }
@@ -947,6 +974,7 @@ struct StreamView: View {
                 viewModel.saveLastSession(LastSessionRecord(
                     sessionId: sessionInfo.sessionId,
                     serverIp: sessionInfo.serverIp,
+                    controlServerIp: sessionInfo.controlServerIp,
                     appId: appId,
                     base: sessionInfo.streamingBaseUrl,
                     routingZoneUrl: sessionInfo.zone.isEmpty ? nil : sessionInfo.zone,
@@ -959,13 +987,13 @@ struct StreamView: View {
                 ))
             }
 
-            // Queue waiting is deliberately unbounded. Setup receives a monotonic
-            // 180-second deadline only after the queue clears, and readiness must
-            // be observed twice consecutively.
+            // A user-requested launch waits through queue and setup until cancellation
+            // or a service error. Readiness must be observed twice consecutively.
             sessionInfo = try await sessionOrchestrator.waitUntilReady(
                 initialSession: sessionInfo,
                 token: token,
-                attempt: orchestrationAttempt
+                attempt: orchestrationAttempt,
+                setupTimeout: nil
             ) { session, readiness in
                 applyOrchestrationUpdate(
                     session: session,
@@ -993,6 +1021,9 @@ struct StreamView: View {
             )
         } catch is CancellationError {
             return
+        } catch SessionOrchestrationError.sessionEnded {
+            guard isCurrentSessionAttempt(generation) else { return }
+            streamController.fail(with: L10n.text("session_ended"))
         } catch SessionOrchestrationError.setupTimedOut {
             guard isCurrentSessionAttempt(generation) else { return }
             loadingPhase = .timedOut
@@ -1017,10 +1048,15 @@ struct StreamView: View {
         case .preparing:
             loadingPhase = .preparing
         case .ready:
-            break
+            loadingPhase = .connecting
         case .timedOut:
             loadingPhase = .timedOut
         }
+    }
+
+    private var providerStreamingBase: String {
+        let url = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
+        return url.hasSuffix("/") ? String(url.dropLast()) : url
     }
 
     private var currentMembershipTier: String? {
@@ -1125,43 +1161,32 @@ struct StreamView: View {
     private func disconnect() {
         guard !isEndingSession else { return }
         isEndingSession = true
-        endConfirmationFailed = false
         cancelSessionAttempt()
-        let shouldRefreshActiveSessions = createdSession != nil
+        let sessionID = createdSession?.sessionId
         let lease = serverSessionLease
-        Task {
-            let didEnd: Bool = if let lease {
-                await cloudSessionCoordinator
-                    .endServerSessionUsingProvider(lease)
-            } else {
+        let cleanup = lease.flatMap { cloudSessionCoordinator.endServerSessionInBackground($0) }
+        streamController.disconnect()
+        releaseLocalPeerLease()
+
+        Task { [viewModel, authManager, sessionOrchestrator] in
+            let didEnd: Bool = if let cleanup {
+                await cleanup.value
+            } else if lease == nil {
                 await sessionOrchestrator.teardown()
+            } else {
+                false
             }
             guard didEnd else {
-                isEndingSession = false
-                endConfirmationFailed = true
-                streamController.disconnect()
-                streamController.fail(
-                    with: L10n.text("cloud_service_unavailable")
-                )
+                streamLog.warning("Background session cleanup remains pending; the next launch can retry")
                 return
             }
-
-            // Clear resumable metadata only after the service confirms End.
-            viewModel.resumableSession = nil
-            viewModel.clearLastSession()
-            if let session = createdSession {
-                viewModel.markSessionStopped(session.sessionId)
-            }
-            serverSessionLease = nil
-            streamController.disconnect()
-            releaseLocalPeerLease()
-            if shouldRefreshActiveSessions {
-                // Converge to server truth once the stop has actually landed
-                // (the grace window still excludes the stopped id).
+            if let sessionID {
+                viewModel.markSessionStopped(sessionID)
                 await viewModel.refreshActiveSessions(authManager: authManager)
             }
-            onDismiss()
         }
+        // Leaving the local player must never wait for a remote DELETE/poll.
+        onDismiss()
     }
 
     private func reserveServerSession(
@@ -1175,6 +1200,9 @@ struct StreamView: View {
            current.serverSessionID == session.sessionId
         {
             return true
+        }
+        if let token = sessionToken {
+            sessionOrchestrator.adopt(session, token: token, base: providerStreamingBase)
         }
         guard sessionToken != nil,
               let stopHandle = sessionOrchestrator.stopHandle(for: session.sessionId)
@@ -1255,8 +1283,8 @@ struct StreamView: View {
         sessionOrchestrator.adoptStopTarget(
             sessionID: session.sessionId,
             token: token,
-            base: session.base,
-            serverIP: session.serverIp.isEmpty ? nil : session.serverIp,
+            base: providerStreamingBase,
+            serverIP: session.controlServerIp ?? (session.serverIp.isEmpty ? nil : session.serverIp),
             clientID: session.clientId,
             deviceID: session.deviceId
         )
@@ -1276,7 +1304,44 @@ struct StreamView: View {
     ) async throws -> SessionInfo {
         try requireCurrentSessionAttempt(generation)
         let isNvidiaProvider = authManager.session?.provider.isNvidiaDirect ?? true
-        let routeSelection: (base: String, routingZoneUrl: String?) = if isNvidiaProvider {
+        var storageRegion: GFNRegion?
+        var launchGame = game
+        if isNvidiaProvider {
+            do {
+                if let fresh = try await viewModel.fetchGameLaunchInfo(for: game, authManager: authManager) {
+                    if game.isInstallToPlay, fresh.playType == nil || fresh.playType == .unknown {
+                        throw GFNInstallToPlayError.statusUnavailable
+                    }
+                    launchGame = fresh
+                } else if game.isInstallToPlay {
+                    throw GFNInstallToPlayError.statusUnavailable
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if game.isInstallToPlay {
+                    throw error
+                }
+            }
+            try requireCurrentSessionAttempt(generation)
+        }
+        if launchGame.isInstallToPlay {
+            guard isNvidiaProvider else { throw GFNInstallToPlayError.unavailable }
+            let subscription = try await viewModel.refreshInstallToPlayStatus(authManager: authManager)
+            try requireCurrentSessionAttempt(generation)
+            if let storage = try GFNInstallToPlayLaunch.storage(
+                for: launchGame,
+                variantId: appId,
+                subscription: subscription
+            ), storage.isPersistent, let regionName = storage.regionName, !regionName.isEmpty {
+                let serverInfo = try? await ServerInfoClient.shared.fetch(baseUrl: base, token: token)
+                try requireCurrentSessionAttempt(generation)
+                storageRegion = GFNInstallToPlayLaunch.region(for: storage, regions: serverInfo?.regions ?? [])
+            }
+        }
+        let routeSelection: (base: String, routingZoneUrl: String?) = if let storageRegion {
+            (storageRegion.address, storageRegion.address)
+        } else if isNvidiaProvider {
             switch settings.serverRoutingMode {
             case .region:
                 settings.preferredRegionAddress.map { ($0, $0) } ?? (base, nil)
@@ -1302,7 +1367,7 @@ struct StreamView: View {
             localVideoCapabilities: LocalVideoCapabilities.detect(codec: settings.codec.resolvedCodec),
             accountLinked: true,
             accountAllowsHDR: viewModel.subscription?.allowsHDR,
-            skipNvidiaFallback: !isNvidiaProvider
+            skipNvidiaFallback: !isNvidiaProvider || storageRegion != nil
         )
 
         do {
@@ -1326,7 +1391,7 @@ struct StreamView: View {
             guard shouldForceStopExistingSession(error) else { throw error }
 
             streamLog.warning("[Session] active session conflict detected for appId=\(appId, privacy: .public), stopping matches and retrying once")
-            try await cloudMatchClient.stopActiveSessions(matchingAppId: appId, token: token, base: routeSelection.base)
+            try await cloudMatchClient.stopActiveSessions(matchingAppId: appId, token: token, base: base)
             try requireCurrentSessionAttempt(generation)
 
             let sessionInfo = try await sessionOrchestrator.createSession(
@@ -1553,7 +1618,7 @@ private struct StreamLoadingProgressView: View {
     private func advance(at now: Date) {
         let target: Double
         switch phase {
-        case .finding:
+        case .finding, .cleaningUp:
             lifecycle.prepareStartedAt = nil
             target = 0.06
         case let .inQueue(position):
@@ -1584,7 +1649,7 @@ private struct StreamLoadingProgressView: View {
             }
             let total = max(elapsed + liveRemaining, 4)
             target = 0.55 + 0.41 * min(elapsed / total, 1)
-        case .timedOut:
+        case .connecting, .timedOut:
             return
         }
 

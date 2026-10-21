@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private nonisolated let sessionLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "SessionOrchestrator")
 
 /// Narrow CloudMatch boundary used by the session lifecycle coordinator.
 ///
@@ -86,6 +89,7 @@ nonisolated struct SessionReconnectPolicy: Sendable {
 
 nonisolated enum SessionOrchestrationError: Error, Equatable {
     case setupTimedOut
+    case sessionEnded
 }
 
 /// Coordinates the testable portion of CloudMatch session lifecycle work.
@@ -217,7 +221,8 @@ final class SessionOrchestrator {
         }
     }
 
-    /// Polls indefinitely while queued, then applies a bounded post-queue setup timeout.
+    /// Polls indefinitely while queued, then applies the optional post-queue setup timeout.
+    /// A nil timeout keeps waiting for readiness until cancellation or a service error.
     ///
     /// Consecutive ready responses are intentionally counted by the pure readiness
     /// reducer so a transient ready response cannot start WebRTC prematurely.
@@ -226,7 +231,7 @@ final class SessionOrchestrator {
         token: String,
         attempt: SessionAttemptToken,
         requiredReadyResponses: Int = 2,
-        setupTimeout: TimeInterval = 180,
+        setupTimeout: TimeInterval? = 180,
         onUpdate: UpdateHandler? = nil
     ) async throws -> SessionInfo {
         try requireAccepted(attempt)
@@ -255,6 +260,9 @@ final class SessionOrchestrator {
                     taskIsCancelled: Task.isCancelled
                 )
                 adopt(session, token: token)
+                guard session.status != 4 else {
+                    throw SessionOrchestrationError.sessionEnded
+                }
 
                 let state = await readiness.observe(
                     status: session.status,
@@ -320,12 +328,16 @@ final class SessionOrchestrator {
     }
 
     /// Registers a session created or reclaimed outside the coordinator.
-    func adopt(_ session: SessionInfo, token: String) {
+    /// Keep the provider listing endpoint when polling moves to a media host.
+    func adopt(_ session: SessionInfo, token: String, base: String? = nil) {
+        let previousBase = ownedSession.flatMap {
+            $0.handle.sessionID == session.sessionId ? $0.handle.base : nil
+        }
         adoptStopTarget(
             sessionID: session.sessionId,
             token: token,
-            base: session.streamingBaseUrl,
-            serverIP: session.serverIp.isEmpty ? nil : session.serverIp,
+            base: base ?? previousBase ?? session.streamingBaseUrl,
+            serverIP: session.controlServerIp ?? (session.serverIp.isEmpty ? nil : session.serverIp),
             clientID: session.clientId,
             deviceID: session.deviceId
         )
@@ -486,7 +498,7 @@ final class SessionOrchestrator {
             sessionID: session.sessionId,
             token: token,
             base: session.streamingBaseUrl,
-            serverIP: session.serverIp.isEmpty ? nil : session.serverIp,
+            serverIP: session.controlServerIp ?? (session.serverIp.isEmpty ? nil : session.serverIp),
             clientID: session.clientId,
             deviceID: session.deviceId
         ))
@@ -513,6 +525,8 @@ final class SessionOrchestrator {
                     )
                     return true
                 } catch {
+                    let failure = error as NSError
+                    sessionLog.error("Server cleanup failed: domain=\(failure.domain, privacy: .public) code=\(failure.code, privacy: .public)")
                     return false
                 }
             }

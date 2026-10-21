@@ -633,6 +633,7 @@ actor CloudMatchClient {
         let url = URL(string: "\(effectiveBase)/v2/session/\(sessionId)")!
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
+        request.timeoutInterval = 5
         let lifecycleClientId = clientId ?? uuid().uuidString
         let stableDeviceId = deviceId ?? self.deviceId()
         for (k, v) in gfnHeaders(
@@ -659,8 +660,9 @@ actor CloudMatchClient {
             try validateAPIStatus(payload, context: "stopSession")
         }
 
-        // DELETE acknowledges the stop request; the rig may still be shutting down.
-        // Keep ownership until the same endpoint confirms that this session ended.
+        // Individual session records can linger after shutdown. Confirm against the
+        // provider's authoritative active list, not the media/control endpoint.
+        request.url = URL(string: "\(base)/v2/session")!
         request.httpMethod = "GET"
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 5
@@ -669,17 +671,14 @@ actor CloudMatchClient {
             try Task.checkCancellation()
             guard ContinuousClock.now < deadline else { break }
             let (data, response) = try await transport.data(for: request)
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-            if statusCode == 404 || statusCode == 410 {
-                return
-            }
             try validateHTTPStatus(response, data: data, context: "stopSession")
-            let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
+            let payload = try JSONDecoder().decode(GetSessionsResponse.self, from: data)
             try validateAPIStatus(payload, context: "stopSession")
-            guard let session = payload.session, session.sessionId == sessionId else {
+            guard let sessions = payload.sessions else {
                 throw CloudMatchError.missingSession(context: "stopSession")
             }
-            if session.status == 4 {
+            if !sessions.contains(where: { $0.sessionId == sessionId }) {
+                cloudMatchLog.info("[CloudMatch] cleanup confirmed: session absent from active list")
                 return
             }
             if attempt < 14 {
@@ -713,14 +712,15 @@ actor CloudMatchClient {
             let appId = entry.sessionRequestData?.appId?.value
             let sigConn = entry.connectionInfo?.first { $0.usage == 14 }
             let serverIp = sigConn.flatMap { $0.ip?.value ?? hostFromResourcePath($0.resourcePath) }
-                ?? entry.sessionControlInfo?.ip?.value
+                ?? normalizedControlServerIp(entry.sessionControlInfo?.ip?.value)
             let signalingUrl = serverIp.map { resolveSignalingUrl(serverIp: $0, resourcePath: sigConn?.resourcePath ?? "/nvst/") }
             return ActiveSessionInfo(
                 sessionId: entry.sessionId,
                 status: entry.status,
                 appId: appId,
                 serverIp: serverIp,
-                signalingUrl: signalingUrl
+                signalingUrl: signalingUrl,
+                controlServerIp: normalizedControlServerIp(entry.sessionControlInfo?.ip?.value)
             )
         }
     }
@@ -736,7 +736,7 @@ actor CloudMatchClient {
                 sessionId: session.sessionId,
                 token: token,
                 base: base,
-                serverIp: session.serverIp
+                serverIp: session.controlServerIp ?? session.serverIp
             )
         }
     }
@@ -863,7 +863,7 @@ actor CloudMatchClient {
         // Signaling server: usage=14
         let sigConn = connections.first { $0.usage == 14 }
         let serverIp = sigConn.flatMap { serverHost(from: $0) }
-            ?? s.sessionControlInfo?.ip?.value
+            ?? normalizedControlServerIp(s.sessionControlInfo?.ip?.value)
             ?? ""
         let resourcePath = sigConn?.resourcePath ?? "/nvst/"
         let signalingUrl = resolveSignalingUrl(serverIp: serverIp, resourcePath: resourcePath)
@@ -896,8 +896,15 @@ actor CloudMatchClient {
             mediaConnectionInfo: media,
             clientId: clientId,
             deviceId: deviceId,
-            adState: adState
+            adState: adState,
+            controlServerIp: normalizedControlServerIp(s.sessionControlInfo?.ip?.value)
         )
+    }
+
+    private func normalizedControlServerIp(_ value: String?) -> String? {
+        guard let host = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty else { return nil }
+        return host
     }
 
     /// Accepts dedicated zone hosts and official region addresses, while excluding

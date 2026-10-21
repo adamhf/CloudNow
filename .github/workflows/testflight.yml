@@ -168,17 +168,13 @@ jobs:
               archive.extractall(directory, filter="data")
           PY
 
-      - name: Install Apple Transporter
+      - name: Verify Xcode upload tool before loading secrets
         run: |
           set -euo pipefail
-          pkg="$RUNNER_TEMP/Transporter.pkg"
-          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
-            'https://itunesconnect.apple.com/WebObjects/iTunesConnect.woa/ra/resources/download/public/Transporter__OSX/bin/' \
-            --output "$pkg"
-          # Apple Transporter 4.2.0.16; review the new installer before updating this hash.
-          printf '%s  %s\n' c238022d959750edb0f3d35bbeea44844ca8781f69435b409e8f019d60e55b17 "$pkg" | shasum -a 256 --check
-          pkgutil --check-signature "$pkg"
-          sudo installer -pkg "$pkg" -target /
+          help="$(xcrun altool --help)"
+          for option in --upload-package --api-key-subject --p8-file-path; do
+            [[ "$help" == *"$option"* ]] || { echo "::error::Xcode altool is missing a required upload option."; exit 1; }
+          done
 
       - name: Sign and export TestFlight IPA
         env:

@@ -89,8 +89,9 @@ without signing or upload credentials. Signing downloads only the same run's
 artifact by ID, checks its SHA-256, and safely extracts it. Only release scripts
 from the workflow commit run beside credentials;
 no package resolution or app build runs there. The upload key is available only
-to the upload step, and its short-lived Individual JWT is masked. Signing files
-and the temporary keychain are removed; hosted runners are discarded afterward.
+to the upload step. It is written to a private temporary file for Xcode's `altool`
+and removed when the step exits. Signing files and the temporary keychain are
+removed; hosted runners are discarded afterward.
 
 Secrets keep configured values out of the workflow source and enable log
 masking; they do not make app identifiers confidential. The existing Xcode
@@ -102,10 +103,12 @@ two non-credential identifiers belong there. The public GitHub usernames,
 account IDs, repository identity, and reviewed tool pins remain in source so
 authorization and dependency changes require code review.
 
-Actions use full commit pins. Apple Transporter is downloaded from Apple's
-official endpoint and checked against a reviewed installer SHA-256 before any
-signing or upload credentials are used. If Apple replaces the installer, the checksum check
-stops the release until the new package is verified and its pin updated.
+Actions use full commit pins. Uploads use `altool` from the selected Xcode version;
+its required options are checked before signing or upload credentials are loaded.
+Transporter 4.2's supplied-JWT path fails during client initialization. The upload
+command follows [Fastlane's Individual-key compatibility path](https://github.com/fastlane/fastlane/blob/master/fastlane_core/lib/fastlane_core/itunes_transporter.rb):
+`--api-key-subject user`, with the key ID also supplied as the required issuer
+argument. This placeholder is not a Team Issuer ID and needs no additional secret.
 
 The first credentialed run must confirm archive export and Apple's acceptance
 with the supplied certificate, profile, and API key. Local checks cannot prove
@@ -113,4 +116,4 @@ those without the credentials. Export/signature failures stop before upload.
 
 References: [GitHub environment protections](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments),
 [Apple Individual API tokens](https://developer.apple.com/documentation/appstoreconnectapi/generating-tokens-for-api-requests),
-[Apple Transporter](https://help.apple.com/itc/transporteruserguide/en.lproj/static.html).
+[Apple build uploads](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds/).

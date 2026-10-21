@@ -95,7 +95,7 @@ xcodebuild -exportArchive \
 ditto -x -k "$RUNNER_TEMP/testflight-export/CloudNow.ipa" "$signing_dir/exported"
 app="$signing_dir/exported/Payload/CloudNow.app"
 codesign --verify --deep --strict "$app"
-codesign --display --entitlements - "$app" > "$signing_dir/signed-entitlements.plist"
+codesign --display --entitlements - --xml "$app" > "$signing_dir/signed-entitlements.plist"
 python3 - <<'PY'
 import os
 import pathlib

@@ -26,7 +26,8 @@ The repository owner must configure these settings before adding credentials:
 | `APPLE_CERTIFICATE_BASE64` | Base64 of the Apple Distribution `.p12`, including its private key |
 | `APPLE_CERTIFICATE_PASSWORD` | Password protecting that `.p12` |
 | `APPLE_PROVISIONING_PROFILE_BASE64` | Base64 of the tvOS App Store distribution `.mobileprovision` for the configured bundle ID, matching the certificate |
-| `ASC_KEY_ID` | Key ID of the Individual App Store Connect API key |
+| `ASC_KEY_ID` | Key ID of the Team App Store Connect API key |
+| `ASC_ISSUER_ID` | Issuer ID shown with the Team keys in App Store Connect |
 | `ASC_PRIVATE_KEY` | Entire `.p8` file contents, including the BEGIN/END lines |
 
 6. Under **Settings > Secrets and variables > Actions**, add these two
@@ -42,10 +43,9 @@ only at repository scope; do not duplicate them in the environment. This keeps
 their values out of the workflow source without giving the build job access to
 the environment containing signing and upload credentials.
 
-No GitHub variables, numeric Apple ID, Issuer ID, Apple account password, or
+No GitHub variables, numeric Apple ID, Apple account password, or
 personal GitHub token are required.
-The Individual key must retain App Manager access to CloudNow. Its permissions
-follow its Apple account; it cannot manage provisioning profiles.
+The Team key must be active with the App Manager role.
 
 For binary secrets, these local commands copy base64 to the macOS clipboard:
 
@@ -105,15 +105,13 @@ authorization and dependency changes require code review.
 
 Actions use full commit pins. Uploads use `altool` from the selected Xcode version;
 its required options are checked before signing or upload credentials are loaded.
-Transporter 4.2's supplied-JWT path fails during client initialization. The upload
-command follows [Fastlane's Individual-key compatibility path](https://github.com/fastlane/fastlane/blob/master/fastlane_core/lib/fastlane_core/itunes_transporter.rb):
-`--api-key-subject user`, with the key ID also supplied as the required issuer
-argument. This placeholder is not a Team Issuer ID and needs no additional secret.
+`altool` signs a Team-key JWT using `ASC_ISSUER_ID` as its issuer (`iss`).
+No Individual-key user subject (`sub: user`) is sent.
 
 The first credentialed run must confirm archive export and Apple's acceptance
 with the supplied certificate, profile, and API key. Local checks cannot prove
 those without the credentials. Export/signature failures stop before upload.
 
 References: [GitHub environment protections](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments),
-[Apple Individual API tokens](https://developer.apple.com/documentation/appstoreconnectapi/generating-tokens-for-api-requests),
+[Apple API tokens](https://developer.apple.com/documentation/appstoreconnectapi/generating-tokens-for-api-requests),
 [Apple build uploads](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds/).

@@ -172,7 +172,7 @@ jobs:
         run: |
           set -euo pipefail
           help="$(xcrun altool --help 2>&1)"
-          for option in --upload-package --api-key-subject --p8-file-path; do
+          for option in --upload-package --api-key --api-issuer --p8-file-path; do
             [[ "$help" == *"$option"* ]] || { echo "::error::Xcode altool is missing a required upload option."; exit 1; }
           done
 
@@ -185,9 +185,10 @@ jobs:
           APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
         run: bash Scripts/Release/sign-testflight.sh
 
-      - name: Upload with Individual App Store Connect API key
+      - name: Upload with Team App Store Connect API key
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
         run: bash Scripts/Release/upload-testflight.sh
 

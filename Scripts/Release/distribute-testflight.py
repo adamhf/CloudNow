@@ -270,11 +270,11 @@ def set_what_to_test(client, build_id, locale, notes):
 
 
 def add_group_access(client, build_id, group_id):
-    groups = client.list_resources(
-        f"/builds/{build_id}/betaGroups",
-        [("fields[betaGroups]", "name,isInternalGroup"), ("limit", "200")],
+    builds = client.list_resources(
+        f"/betaGroups/{group_id}/relationships/builds",
+        [("limit", "200")],
     )
-    if any(group.get("id") == group_id for group in groups):
+    if any(build.get("id") == build_id for build in builds):
         print(f'Build is already assigned to the "{EXTERNAL_GROUP_NAME}" group.')
         return
     client.request(

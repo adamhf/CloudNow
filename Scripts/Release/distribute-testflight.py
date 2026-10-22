@@ -339,22 +339,29 @@ def wait_for_approval(client, build_id, deadline):
                 raise ReleaseError("Apple rejected the build for external TestFlight testing.")
         time.sleep(min(POLL_SECONDS, max(1, deadline - time.monotonic())))
     raise ReleaseError(
-        "Apple beta review is still pending. The build is assigned to Testers; notify testers in App Store Connect after approval."
+        "Apple beta review is still pending. The build is assigned to Testers; automatic notifications are enabled for external testers."
     )
 
 
-def notify_testers(client, build_id):
-    client.request(
-        "POST",
-        "/buildBetaNotifications",
-        {
-            "data": {
-                "type": "buildBetaNotifications",
-                "relationships": {"build": {"data": {"type": "builds", "id": build_id}}},
-            }
-        },
-    )
-    print(f'Apple accepted the build; notification sent to eligible testers in "{EXTERNAL_GROUP_NAME}".')
+def enable_automatic_tester_notifications(client, build_id):
+    response = client.request("GET", f"/builds/{build_id}/buildBetaDetail")
+    detail = response.get("data", {})
+    detail_id = detail.get("id")
+    if not detail_id:
+        raise ReleaseError("App Store Connect did not return beta details for this build.")
+    if detail.get("attributes", {}).get("autoNotifyEnabled") is not True:
+        client.request(
+            "PATCH",
+            f"/buildBetaDetails/{detail_id}",
+            {
+                "data": {
+                    "type": "buildBetaDetails",
+                    "id": detail_id,
+                    "attributes": {"autoNotifyEnabled": True},
+                }
+            },
+        )
+    print("Automatic TestFlight notifications enabled for external testers.")
 
 
 def required_env(name):
@@ -393,16 +400,16 @@ def main():
         build_id = build["id"]
         group_id = find_external_group(client, app_id)
         set_what_to_test(client, build_id, locale, notes)
+        enable_automatic_tester_notifications(client, build_id)
         add_group_access(client, build_id, group_id)
         submission = submit_for_review(client, build_id)
         state = submission.get("attributes", {}).get("betaReviewState")
         if state != "APPROVED":
             print("Build submitted for Apple TestFlight beta review.")
             wait_for_approval(client, build_id, deadline)
-        notify_testers(client, build_id)
         summary = (
             f"Build {version} ({build_number}) was approved for external TestFlight testing and "
-            f"a notification was sent to eligible testers in the {EXTERNAL_GROUP_NAME} group.\n"
+            f"automatic notifications are enabled for eligible testers in the {EXTERNAL_GROUP_NAME} group.\n"
         )
         summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary_path:

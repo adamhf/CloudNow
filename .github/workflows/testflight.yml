@@ -11,6 +11,10 @@ on:
         description: New, unused build number
         required: true
         type: string
+      what_to_test:
+        description: Optional notes shown to TestFlight testers
+        required: false
+        type: string
 
 run-name: Manual TestFlight release
 
@@ -121,7 +125,7 @@ jobs:
           ((github.actor == 'owenselles' && github.actor_id == '16057141') ||
            (github.actor == 'aarikmudgal' && github.actor_id == '29233905')) }}
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 360
     environment: testflight
     concurrency:
       group: testflight-release
@@ -195,3 +199,14 @@ jobs:
       - name: Clean up signing material
         if: always()
         run: bash Scripts/Release/sign-testflight.sh --cleanup
+
+      - name: Distribute to external TestFlight testers
+        env:
+          APPLE_BUNDLE_ID: ${{ secrets.APPLE_BUNDLE_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          VERSION: ${{ inputs.version }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          WHAT_TO_TEST: ${{ inputs.what_to_test }}
+        run: python3 Scripts/Release/distribute-testflight.py

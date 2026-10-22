@@ -63,13 +63,24 @@ as text. Never commit or upload private signing files as workflow artifacts.
    commit to pass. Complete applicable [release validation](ReleaseValidation.md).
 2. Open **Actions > Release to TestFlight > Run workflow** and select `main`.
 3. Enter the intended version and a new, unused build number after checking
-   App Store Connect. No app-specific version or build defaults are stored.
+   App Store Connect. Optionally enter **What to Test** notes for this build;
+   those notes are visible to testers and in the workflow run metadata. No
+   app-specific version or build defaults are stored.
 4. Once the unsigned build succeeds, approve its `testflight` environment job.
    Either `owenselles` or `aarikmudgal` can dispatch and self-approve.
-5. Check App Store Connect for processing, export-compliance questions, and
-   TestFlight group availability. External testing can require Apple's beta
-   review. The workflow uploads a build; it does not submit an App Store release
-   or change tester groups.
+5. After upload, the workflow waits for Apple to process the build, assigns it
+   to the existing external **Testers** group, submits it for TestFlight beta
+   review, and waits for Apple's decision. Once Apple approves it, the workflow
+   sends the available-build notification to eligible testers in that group.
+   Apple controls processing and review, so this can take several hours. The
+   workflow waits up to five hours after upload; if review is still pending,
+   the build remains uploaded, assigned, and submitted, but you must notify
+   testers in App Store Connect after approval. If Apple rejects it, inspect the
+   review details in App Store Connect.
+
+   The app-level **Beta App Description** and beta-review contact details must
+   already be configured in App Store Connect. The workflow only sets the
+   optional per-build **What to Test** notes when supplied.
 
 Re-runs are deliberately rejected, including re-running only the upload job.
 Start a new manual run. If Apple already accepted the previous upload, use a new
@@ -88,10 +99,11 @@ Compilation receives only the two app identifiers on a separate hosted runner,
 without signing or upload credentials. Signing downloads only the same run's
 artifact by ID, checks its SHA-256, and safely extracts it. Only release scripts
 from the workflow commit run beside credentials;
-no package resolution or app build runs there. The upload key is available only
-to the upload step. It is written to a private temporary file for Xcode's `altool`
-and removed when the step exits. Signing files and the temporary keychain are
-removed; hosted runners are discarded afterward.
+no package resolution or app build runs there. The App Store Connect key is
+available only to the upload and distribution steps. Each step writes it to a
+private temporary file and removes it on exit. Signing files and the temporary
+keychain are removed before the workflow waits for Apple's review; hosted runners
+are discarded afterward.
 
 Secrets keep configured values out of the workflow source and enable log
 masking; they do not make app identifiers confidential. The existing Xcode

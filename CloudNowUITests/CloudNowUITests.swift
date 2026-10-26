@@ -1416,17 +1416,18 @@ final class CloudNowUITests: XCTestCase {
 
         let page = element("settings.stream-quality.chroma-sampling.page", in: app)
         XCTAssertTrue(page.waitForExistence(timeout: 3))
-        let yuv420 = element("settings.stream-quality.chroma-sampling.option.4:2:0", in: app)
-        let yuv444 = element("settings.stream-quality.chroma-sampling.option.4:4:4", in: app)
+        let yuv420Identifier = "settings.stream-quality.chroma-sampling.option.4:2:0"
+        let yuv444Identifier = "settings.stream-quality.chroma-sampling.option.4:4:4"
+        let yuv420 = app.buttons[yuv420Identifier]
+        let yuv444 = app.buttons[yuv444Identifier]
+        let yuv420Row = app.cells.containing(.button, identifier: yuv420Identifier).firstMatch
+        let yuv444Row = app.cells.containing(.button, identifier: yuv444Identifier).firstMatch
         XCTAssertTrue(yuv444.waitForExistence(timeout: 3))
         XCTAssertTrue(yuv444.isSelected)
         attachScreenshot(of: app, named: "gfn-chroma-sampling-4-4-4-settings")
-        // Clamp to the final option, avoiding stale Form focus queries on CI.
-        for _ in 0 ..< 3 {
-            XCUIRemote.shared.press(.down)
-        }
-        XCUIRemote.shared.press(.up)
-        XCUIRemote.shared.press(.select)
+        // Verify the option's native Form cell owns focus before sending Select.
+        focusAndSelect(yuv420Row, directions: [.up, .down], pressesPerDirection: 3)
+        XCTAssertTrue(page.waitForNonExistence(timeout: 8))
         XCTAssertTrue(waitForAccessibilityText("4:2:0", in: chroma))
 
         XCTAssertTrue(focusedChroma.waitForExistence(timeout: 3))
@@ -1435,17 +1436,16 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertTrue(yuv420.isSelected)
         XCTAssertFalse(yuv444.isSelected)
 
-        XCUIRemote.shared.press(.down)
+        focus(yuv444Row, directions: [.down, .up], pressesPerDirection: 3)
         XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(page.waitForNonExistence(timeout: 8))
         XCTAssertTrue(focusedChroma.waitForExistence(timeout: 3))
         XCTAssertTrue(waitForAccessibilityText("4:2:0", in: chroma))
         XCUIRemote.shared.press(.select)
         XCTAssertTrue(page.waitForExistence(timeout: 3))
         XCTAssertTrue(yuv420.isSelected)
-        for _ in 0 ..< 3 {
-            XCUIRemote.shared.press(.down)
-        }
-        XCUIRemote.shared.press(.select)
+        focusAndSelect(yuv444Row, directions: [.down, .up], pressesPerDirection: 3)
+        XCTAssertTrue(page.waitForNonExistence(timeout: 8))
         XCTAssertTrue(waitForAccessibilityText("4:4:4", in: chroma))
     }
 

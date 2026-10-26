@@ -1455,30 +1455,23 @@ final class CloudNowUITests: XCTestCase {
         app.launch()
         openSettings(in: app)
 
-        let pacing = app.switches["settings.stream-quality.adaptive-frame-pacing"]
+        let identifier = "settings.stream-quality.adaptive-frame-pacing"
+        let pacing = app.switches[identifier]
+        // Native tvOS Form cells own focus; the switch is an accessibility child.
+        let row = app.cells.containing(.switch, identifier: identifier).firstMatch
         focus(
-            labelContaining: "Adaptive Frame Pacing",
-            in: app,
+            row,
             directions: [.down],
             pressesPerDirection: 40
         )
         XCTAssertTrue(pacing.waitForExistence(timeout: 3))
         XCTAssertEqual(pacing.value as? String, "0")
 
-        XCUIRemote.shared.press(.select)
-        let enabled = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@", "1"),
-            object: pacing
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 3), .completed)
+        assertToggleChange(pacing, focusedRow: row, to: "1", in: app)
         attachScreenshot(of: app, named: "Adaptive Frame Pacing enabled")
 
-        XCUIRemote.shared.press(.select)
-        let disabled = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@", "0"),
-            object: pacing
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [disabled], timeout: 3), .completed)
+        focus(row, directions: [.up, .down], pressesPerDirection: 40)
+        assertToggleChange(pacing, focusedRow: row, to: "0", in: app)
     }
 
     @MainActor
@@ -1490,30 +1483,22 @@ final class CloudNowUITests: XCTestCase {
         app.launch()
         openConfiguredXboxSettings(in: app)
 
-        let pacing = app.switches["xbox.settings.stream-quality.adaptive-frame-pacing"]
+        let identifier = "xbox.settings.stream-quality.adaptive-frame-pacing"
+        let pacing = app.switches[identifier]
+        let row = app.cells.containing(.switch, identifier: identifier).firstMatch
         focus(
-            labelContaining: "Adaptive Frame Pacing",
-            in: app,
+            row,
             directions: [.down],
             pressesPerDirection: 20
         )
         XCTAssertTrue(pacing.waitForExistence(timeout: 3))
         XCTAssertEqual(pacing.value as? String, "0")
 
-        XCUIRemote.shared.press(.select)
-        let enabled = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@", "1"),
-            object: pacing
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 3), .completed)
+        assertToggleChange(pacing, focusedRow: row, to: "1", in: app)
         attachScreenshot(of: app, named: "Xbox Adaptive Frame Pacing enabled")
 
-        XCUIRemote.shared.press(.select)
-        let disabled = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@", "0"),
-            object: pacing
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [disabled], timeout: 3), .completed)
+        focus(row, directions: [.up, .down], pressesPerDirection: 20)
+        assertToggleChange(pacing, focusedRow: row, to: "0", in: app)
     }
 
     @MainActor
@@ -2981,6 +2966,53 @@ final class CloudNowUITests: XCTestCase {
             object: element
         )
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    @MainActor
+    private func assertToggleChange(
+        _ toggle: XCUIElement,
+        focusedRow: XCUIElement,
+        to expectedValue: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        func reportFailure(_ stage: String) {
+            let focused = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "hasFocus == true"))
+                .firstMatch
+            attachScreenshot(of: app, named: "Toggle transition failure")
+            let identifier = toggle.exists ? toggle.identifier : "missing switch"
+            let value = toggle.exists ? String(describing: toggle.value) : "missing"
+            let currentFocus = focused.exists ? focused.debugDescription : "none"
+            XCTFail(
+                "\(stage): \(identifier), expected \(expectedValue), value \(value); focus: \(currentFocus)",
+                file: file,
+                line: line
+            )
+        }
+
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate { object, _ in
+                guard let element = object as? XCUIElement else { return false }
+                return element.exists && focusedRow.hasFocus && element.isEnabled && element.isHittable
+            },
+            object: toggle
+        )
+        guard XCTWaiter.wait(for: [ready], timeout: 8) == .completed else {
+            reportFailure("Toggle was not ready for Select")
+            return
+        }
+
+        XCUIRemote.shared.press(.select)
+        let changed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", expectedValue),
+            object: toggle
+        )
+        guard XCTWaiter.wait(for: [changed], timeout: 8) == .completed else {
+            reportFailure("Toggle value did not change")
+            return
+        }
     }
 
     @MainActor
